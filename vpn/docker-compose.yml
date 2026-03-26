@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  vpn-server:
+    build: ./vpn-server
+    container_name: vpn-gen
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    ports:
+      - "4000:4000"
+      - "1194:1194/udp"
+    networks:
+      lab_network:
+        ipv4_address: 125.10.0.2
+    volumes:
+      - vpn_master_data:/etc/openvpn
+
+  server-a:
+    build: ./dev-server
+    container_name: server-1
+    networks:
+      lab_network:
+        ipv4_address: 125.10.0.10
+    cap_add:
+      - NET_ADMIN
+
+networks:
+  lab_network:
+    ipam:
+      config:
+        - subnet: 125.10.0.0/24
+
+volumes:
+  vpn_master_data:

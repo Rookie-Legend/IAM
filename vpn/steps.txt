@@ -1,0 +1,43 @@
+docker-compose up -d --build
+docker exec -it vpn-gen bash
+
+
+mkdir -p /etc/openvpn/easy-rsa
+mkdir -p /etc/openvpn/client-configs
+cp -r /usr/share/easy-rsa/* /etc/openvpn/easy-rsa/
+cd /etc/openvpn/easy-rsa
+
+./easyrsa init-pki
+./easyrsa build-ca nopass
+./easyrsa gen-req server nopass
+./easyrsa sign-req server server
+./easyrsa gen-dh
+./easyrsa gen-crl
+cp pki/crl.pem /etc/openvpn/crl.pem
+
+
+cat > /etc/openvpn/server.conf <<EOF
+port 1194
+proto udp
+dev tun
+ca /etc/openvpn/easy-rsa/pki/ca.crt
+cert /etc/openvpn/easy-rsa/pki/issued/server.crt
+key /etc/openvpn/easy-rsa/pki/private/server.key
+dh /etc/openvpn/easy-rsa/pki/dh.pem
+crl-verify /etc/openvpn/crl.pem
+# 1. THE USER IP POOL
+server 125.20.0.0 255.255.255.0
+# 2. THE ROUTE
+push "route 125.10.0.10 255.255.255.255"
+keepalive 10 120
+cipher AES-256-GCM
+persist-key
+persist-tun
+verb 3
+EOF
+
+
+iptables -t nat -A POSTROUTING -s 10.2.0.0/24 -o eth0 -j MASQUERADE
+
+pkill openvpn
+openvpn --config /etc/openvpn/server.conf --daemon
