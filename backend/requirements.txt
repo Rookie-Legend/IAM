@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+motor
+pydantic
+pydantic-settings
+pydantic[email]
+python-jose[cryptography]
+passlib==1.7.4
+bcrypt==3.2.2
+python-multipart
+groq
+httpx
+langchain
+langchain-groq
+python-dotenv
+sentence-transformers
+numpy
