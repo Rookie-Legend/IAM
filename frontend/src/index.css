@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0f0f0f;
+  --color-surface: #181818;
+  --color-elevated: #1f1f1f;
+  --color-hover: #252525;
+  --color-text: #ffffff;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted: #71717a;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-subtle: rgba(255, 255, 255, 0.04);
+  --color-accent-blue: #3b82f6;
+  --color-accent-blue-muted: rgba(59, 130, 246, 0.15);
+  --color-success: #22c55e;
+  --color-success-bg: rgba(34, 197, 94, 0.12);
+  --color-error: #ef4444;
+  --color-error-bg: rgba(239, 68, 68, 0.12);
+  --color-warning: #f59e0b;
+  --color-warning-bg: rgba(245, 158, 11, 0.12);
+  --color-warning-muted: rgba(245, 158, 11, 0.15);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+}
+
+.light {
+  --color-bg: #ffffff;
+  --color-surface: #f8f9fa;
+  --color-elevated: #f1f3f5;
+  --color-hover: #e9ecef;
+  --color-text: #212529;
+  --color-text-secondary: #495057;
+  --color-text-muted: #868e96;
+  --color-border: rgba(0, 0, 0, 0.08);
+  --color-border-subtle: rgba(0, 0, 0, 0.04);
+  --color-accent-blue-muted: rgba(59, 130, 246, 0.1);
+  --color-success-bg: rgba(34, 197, 94, 0.1);
+  --color-error-bg: rgba(239, 68, 68, 0.1);
+  --color-warning-bg: rgba(245, 158, 11, 0.1);
+  --color-warning-muted: rgba(245, 158, 11, 0.1);
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+* {
+  transition: border-color 0.3s ease, background-color 0.3s ease;
+}
