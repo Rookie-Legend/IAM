@@ -9,7 +9,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     GROQ_API_KEY: Optional[str] = None
-    VPN_SERVER_URL: str = "http://vpn-server:8000"
+    VPN_SERVER_URL: str = "http://vpn-server:4000"
+    FRONTEND_URL: str = "http://localhost:5173"
 
     class Config:
         env_file = ".env"

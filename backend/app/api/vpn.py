@@ -22,7 +22,7 @@ ALL_VPNS = [
 
 @router.get("/available")
 async def get_available_vpns(db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
-    state = await db["access_states"].find_one({"_id": current_user.id})
+    state = await db["access_states"].find_one({"user_id": current_user.user_id})
     user_vpns = state.get("vpn_access", []) if state else []
     return [
         {**vpn, "accessible": vpn["id"] in user_vpns}
@@ -38,27 +38,27 @@ async def get_vpn_state(user_id: str, current_user: UserInDB = Depends(get_curre
 
 @router.post("/provision/{vpn_id}")
 async def provision_vpn(vpn_id: str, db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
-    state = await db["access_states"].find_one({"_id": current_user.id})
+    state = await db["access_states"].find_one({"user_id": current_user.user_id})
     if not state or vpn_id not in state.get("vpn_access", []):
         raise HTTPException(status_code=403, detail="Not authorized for this VPN")
     async with httpx.AsyncClient() as client:
         try:
-            res = await client.post(f"{settings.VPN_SERVER_URL}/users/{current_user.id}", timeout=10.0)
+            res = await client.post(f"{settings.VPN_SERVER_URL}/users/{current_user.user_id}", timeout=10.0)
             res.raise_for_status()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"VPN API error: {e}")
-    active_vpns[current_user.id] = vpn_id
+    active_vpns[current_user.user_id] = vpn_id
     return {"status": "success", "message": f"VPN profile provisioned for {vpn_id}"}
 
 @router.get("/download-profile")
 async def download_vpn_profile(current_user: UserInDB = Depends(get_current_user)):
     async with httpx.AsyncClient() as client:
         try:
-            res = await client.get(f"{settings.VPN_SERVER_URL}/users/{current_user.id}/download", timeout=10.0)
+            res = await client.get(f"{settings.VPN_SERVER_URL}/users/{current_user.user_id}/download", timeout=10.0)
             if res.status_code != 200:
                 raise HTTPException(status_code=404, detail="VPN profile not found. Provision first.")
             return Response(content=res.content, media_type="application/x-openvpn-profile",
-                            headers={"Content-Disposition": f"attachment; filename={current_user.id}.ovpn"})
+                            headers={"Content-Disposition": f"attachment; filename={current_user.user_id}.ovpn"})
         except HTTPException:
             raise
         except Exception as e:
@@ -66,7 +66,7 @@ async def download_vpn_profile(current_user: UserInDB = Depends(get_current_user
 
 @router.post("/disconnect")
 async def disconnect_vpn(current_user: UserInDB = Depends(get_current_user)):
-    active_vpns.pop(current_user.id, None)
+    active_vpns.pop(current_user.user_id, None)
     return {"status": "success", "message": "Disconnected"}
 
 @router.post("/revoke/{user_id}")

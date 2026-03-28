@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faRocket, faEnvelope, faCheck } from '@fortawesome/free-solid-svg-icons';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { apiUrl } from '../stores/configStore';
 
 const maskEmail = (email) => {
     if (!email) return '';
@@ -31,7 +30,7 @@ export default function Joiner({ onBack }) {
     setLoading(true);
     setErrorMsg('');
     try {
-      const res = await fetch(`${API}/api/auth/verify-invite-token`, {
+      const res = await fetch(apiUrl('/api/auth/verify-invite-token'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token })
@@ -43,7 +42,7 @@ export default function Joiner({ onBack }) {
       }
       setInviteData(data);
 
-      const otpRes = await fetch(`${API}/api/auth/request-registration-otp`, {
+      const otpRes = await fetch(apiUrl('/api/auth/request-registration-otp'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token })
@@ -65,7 +64,7 @@ export default function Joiner({ onBack }) {
     setLoading(true);
     setErrorMsg('');
     try {
-      const res = await fetch(`${API}/api/auth/request-registration-otp`, {
+      const res = await fetch(apiUrl('/api/auth/request-registration-otp'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token })
@@ -87,7 +86,7 @@ export default function Joiner({ onBack }) {
     setLoading(true);
     setErrorMsg('');
     try {
-      const res = await fetch(`${API}/api/auth/verify-registration-otp`, {
+      const res = await fetch(apiUrl('/api/auth/verify-registration-otp'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, otp })
@@ -114,7 +113,7 @@ export default function Joiner({ onBack }) {
     setLoading(true);
     setErrorMsg('');
     try {
-      const res = await fetch(`${API}/api/auth/complete-registration`, {
+      const res = await fetch(apiUrl('/api/auth/complete-registration'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

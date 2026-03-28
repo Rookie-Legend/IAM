@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
+import { apiUrl } from '../stores/configStore';
 
-const Chatbot = ({ token }) => {
+const Chatbot = ({ token, user }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [messages, setMessages] = useState([{ role: 'bot', text: 'How can I help you with IAM decisions today?' }]);
     const [input, setInput] = useState('');
@@ -12,13 +13,13 @@ const Chatbot = ({ token }) => {
         setMessages([...messages, userMsg]);
         setInput('');
 
-        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/orchestrator/request-access`, {
+        const response = await fetch(apiUrl('/api/orchestrator/request-access'), {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`
             },
-            body: JSON.stringify({ user_id: 'U123', resource_id: input })
+            body: JSON.stringify({ user_id: user?.user_id || user?._id, resource_id: input })
         });
         const data = await response.json();
         

@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircle } from '@fortawesome/free-solid-svg-icons';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { apiUrl } from '../stores/configStore';
 
 const AuditDashboard = ({ token }) => {
   const [logs, setLogs] = useState([]);
@@ -13,7 +12,7 @@ const AuditDashboard = ({ token }) => {
   useEffect(() => {
     const fetchLogs = async () => {
       try {
-        const res = await fetch(`${API}/api/audit/logs`, {
+        const res = await fetch(apiUrl('/api/audit/logs'), {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const data = await res.json();
@@ -30,7 +29,7 @@ const AuditDashboard = ({ token }) => {
 
   const findMatchingAccessRequest = async (userId, resourceType) => {
     try {
-      const res = await fetch(`${API}/api/admin/access-requests`, {
+      const res = await fetch(apiUrl('/api/admin/access-requests'), {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const requests = await res.json();
@@ -51,8 +50,8 @@ const AuditDashboard = ({ token }) => {
     }
 
     const endpoint = action === 'accept'
-      ? `${API}/api/admin/access-requests/${request.id}/approve`
-      : `${API}/api/admin/access-requests/${request.id}/deny`;
+      ? apiUrl(`/api/admin/access-requests/${request.id}/approve`)
+      : apiUrl(`/api/admin/access-requests/${request.id}/deny`);
 
     try {
       await fetch(endpoint, {

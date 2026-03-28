@@ -11,6 +11,28 @@ from app.services.email_service import send_email
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
+DEPT_PREFIX_MAP = {
+    "engineering": "U", "devops": "D", "sre": "D", "infrastructure": "D",
+    "finance": "F", "financial": "F", "hr": "H", "human_resources": "H",
+    "product": "P", "security": "S", "legal": "L", "marketing": "M", "sales": "S",
+}
+
+
+async def generate_user_id(db, department: str) -> str:
+    prefix = DEPT_PREFIX_MAP.get(department.lower(), "U")
+    users = await db["users"].find({}, {"user_id": 1}).to_list(length=None)
+    existing = []
+    for u in users:
+        uid = u.get("user_id")
+        if uid and uid.startswith(prefix):
+            try:
+                num = int(uid[len(prefix):])
+                existing.append(num)
+            except ValueError:
+                pass
+    next_num = (max(existing) + 1) if existing else 1001
+    return f"{prefix}{next_num}"
+
 @router.post("/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db=Depends(get_database)):
     user = await db["users"].find_one({"username": form_data.username})
@@ -20,8 +42,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db=Depends(get
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect credentials")
     if user.get("disabled", False):
         raise HTTPException(status_code=400, detail="Account is disabled")
-    token = create_access_token({"sub": user["_id"]})
-    return {"access_token": token, "token_type": "bearer", "role": user.get("role"), "user_id": user["_id"]}
+    token = create_access_token({"sub": user.get("user_id", user["_id"])})
+    return {"access_token": token, "token_type": "bearer", "role": user.get("role"), "user_id": user.get("user_id", user["_id"])}
 
 @router.post("/register")
 async def register(user_in: UserCreate, db=Depends(get_database)):
@@ -30,10 +52,10 @@ async def register(user_in: UserCreate, db=Depends(get_database)):
         raise HTTPException(status_code=400, detail="Username or email already exists")
     hashed = get_password_hash(user_in.password)
     user_dict = user_in.model_dump(exclude={"password"})
-    user_dict["_id"] = user_in.username
+    user_dict["user_id"] = user_in.username
     user_dict["hashed_password"] = hashed
     await db["users"].insert_one(user_dict)
-    await db["access_states"].insert_one({"_id": user_dict["_id"], "vpn_access": []})
+    await db["access_states"].insert_one({"user_id": user_dict["user_id"], "vpn_access": []})
     return {"status": "success", "message": "User registered successfully"}
 
 class VerifyTokenRequest(BaseModel):
@@ -110,8 +132,9 @@ async def complete_registration(request: CompleteRegistrationRequest, db=Depends
         raise HTTPException(status_code=400, detail="Username already exists")
 
     hashed = get_password_hash(request.password)
+    new_user_id = await generate_user_id(db, invite.get("department", "engineering"))
     user_dict = {
-        "_id": request.username,
+        "user_id": new_user_id,
         "username": request.username,
         "email": invite["email"],
         "full_name": request.full_name,
@@ -122,7 +145,7 @@ async def complete_registration(request: CompleteRegistrationRequest, db=Depends
         "hashed_password": hashed
     }
     await db["users"].insert_one(user_dict)
-    await db["access_states"].insert_one({"_id": request.username, "vpn_access": []})
+    await db["access_states"].insert_one({"user_id": new_user_id, "vpn_access": []})
 
     await db["invites"].update_one({"token": request.token}, {"$set": {"status": "completed"}})
     await db["otp_store"].delete_one({"user_id": f"invite_{request.token}"})

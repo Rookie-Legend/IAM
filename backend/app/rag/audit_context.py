@@ -1,14 +1,17 @@
 """
-Audit RAG — fetches the user's recent audit log history from MongoDB.
+Unified RAG - Audit Context
+Fetches the user's audit history and finds similar access patterns via vector search.
 Computes trust level (TRUSTED / MODERATE / RISKY) and returns a context block.
 """
-
 from datetime import datetime
+from app.rag.vector_store import search_similar_logs
 
 
-async def fetch_audit_context(user_id: str, db) -> str:
+async def fetch_audit_context(user_id: str, db, search_query: str = None) -> str:
     """
-    Analyse the last 20 audit_logs entries for this user.
+    Analyse the last 20 audit_logs entries for this user (trust level computation).
+    Also performs vector-based semantic search on rag_chunks to find similar 
+    past access patterns from all users.
     Returns a formatted string for use as LLM context.
     """
     logs = (
@@ -23,9 +26,8 @@ async def fetch_audit_context(user_id: str, db) -> str:
     escalated = sum(1 for l in logs if l.get("decision") == "ESCALATE")
     denied = sum(1 for l in logs if l.get("decision") == "DENY")
 
-    # Trust level based on denial rate
     if total == 0:
-        trust_level = "TRUSTED"   # New user — give benefit of the doubt
+        trust_level = "TRUSTED"
         deny_rate_pct = 0
     else:
         deny_rate_pct = round((denied / total) * 100)
@@ -36,7 +38,6 @@ async def fetch_audit_context(user_id: str, db) -> str:
         else:
             trust_level = "RISKY"
 
-    # Build recent activity summary (last 3 chatbot access requests)
     recent = [l for l in logs if l.get("action") == "chatbot_access_request"][:3]
     recent_lines = []
     for l in recent:
@@ -44,7 +45,7 @@ async def fetch_audit_context(user_id: str, db) -> str:
         date_str = str(ts)[:10] if ts else "unknown"
         resource = l.get("target_resource", l.get("target_user", "unknown"))
         decision = l.get("decision", l.get("action", "?"))
-        recent_lines.append(f"    • {date_str}: {resource} → {decision}")
+        recent_lines.append(f"    - {date_str}: {resource} -> {decision}")
 
     lines = [
         "AUDIT CONTEXT:",
@@ -58,5 +59,12 @@ async def fetch_audit_context(user_id: str, db) -> str:
         lines.extend(recent_lines)
     else:
         lines.append("- Recent Access Requests: none")
+
+    if search_query:
+        similar_patterns = await search_similar_logs(search_query, db, top_k=5)
+        if similar_patterns:
+            lines.append("\n- Similar Past Access Patterns (vector search):")
+            for i, pattern in enumerate(similar_patterns[:3], 1):
+                lines.append(f"    {i}. {pattern[:200]}")
 
     return "\n".join(lines)

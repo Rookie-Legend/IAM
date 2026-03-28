@@ -10,9 +10,8 @@ import Profile from './pages/Profile';
 import { useTheme } from './contexts/ThemeContext';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faUser, faComment, faServer, faShieldHalved, faChartBar, faRightFromBracket, faSun, faMoon, faUserPlus } from '@fortawesome/free-solid-svg-icons';
+import { apiUrl } from './stores/configStore';
 import './App.css';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
   const { theme, toggleTheme } = useTheme();
@@ -29,10 +28,9 @@ function App() {
 
   const fetchAccessState = async () => {
     if (!user || !token) return;
-    // UserInDB._id is stored as user.id from pydantic alias
-    const userId = user._id;
+    const userId = user.user_id;
     try {
-      const res = await fetch(`${API}/api/orchestrator/access/${userId}`, {
+      const res = await fetch(apiUrl(`/api/orchestrator/access/${userId}`), {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.status === 401) {
@@ -166,10 +164,10 @@ function App() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-full bg-gradient-to-br from-accent-blue to-indigo-500 flex items-center justify-center text-white text-sm font-semibold">
-                {user.username[0].toUpperCase()}
+                {(user.full_name || user.username)[0].toUpperCase()}
               </div>
               <div>
-                <div className="text-[13px] font-semibold text-text">{user.username}</div>
+                <div className="text-[13px] font-semibold text-text">{user.full_name || user.username}</div>
                 <div className="text-[11px] text-text-muted">{user.role}</div>
               </div>
             </div>

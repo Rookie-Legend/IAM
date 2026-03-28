@@ -40,7 +40,7 @@ async def seed_db():
 
     users_data = [
         {
-            "_id": "S1001",
+            "user_id": "S1001",
             "username": "admin",
             "hashed_password": pwd_context.hash("admin_pass"),
             "email": "admin@corpod.com",
@@ -51,7 +51,7 @@ async def seed_db():
             "disabled": False
         },
         {
-            "_id": "H1001",
+            "user_id": "H1001",
             "username": "hr_manager",
             "hashed_password": pwd_context.hash("hr_pass"),
             "email": "hr@corpod.com",
@@ -62,7 +62,7 @@ async def seed_db():
             "disabled": False
         },
         {
-            "_id": "U1001",
+            "user_id": "U1001",
             "username": "eng_infra",
             "hashed_password": pwd_context.hash("eng_pass"),
             "email": "infra@corpod.com",
@@ -73,7 +73,7 @@ async def seed_db():
             "disabled": False
         },
         {
-            "_id": "U1002",
+            "user_id": "U1002",
             "username": "eng_front",
             "hashed_password": pwd_context.hash("eng_pass"),
             "email": "frontend@corpod.com",
@@ -84,7 +84,7 @@ async def seed_db():
             "disabled": False
         },
         {
-            "_id": "U1003",
+            "user_id": "U1003",
             "username": "eng_back",
             "hashed_password": pwd_context.hash("eng_pass"),
             "email": "backend@corpod.com",
@@ -95,7 +95,7 @@ async def seed_db():
             "disabled": False
         },
         {
-            "_id": "F1001",
+            "user_id": "F1001",
             "username": "audit_payroll",
             "hashed_password": pwd_context.hash("audit_pass"),
             "email": "payroll@corpod.com",
@@ -106,7 +106,7 @@ async def seed_db():
             "disabled": False
         },
         {
-            "_id": "F1002",
+            "user_id": "F1002",
             "username": "audit_comp",
             "hashed_password": pwd_context.hash("audit_pass"),
             "email": "compliance@corpod.com",
@@ -117,7 +117,7 @@ async def seed_db():
             "disabled": False
         },
         {
-            "_id": "S1002",
+            "user_id": "S1002",
             "username": "rookie",
             "hashed_password": pwd_context.hash("password"),
             "email": "rookie@corpod.com",
@@ -134,7 +134,7 @@ async def seed_db():
 
     policies_data = [
         {
-            "_id": "pol_hr_vpn",
+            "pol_id": "POL-HR000001",
             "name": "HR Confidential VPN",
             "type": "access",
             "description": "VPN access for HR personnel handling confidential data",
@@ -143,7 +143,7 @@ async def seed_db():
             "is_active": True
         },
         {
-            "_id": "pol_eng_vpn",
+            "pol_id": "POL-ENG00001",
             "name": "Engineering VPN",
             "type": "access",
             "description": "VPN access for Engineering staff",
@@ -152,7 +152,7 @@ async def seed_db():
             "is_active": True
         },
         {
-            "_id": "pol_fin_vpn",
+            "pol_id": "POL-FIN00001",
             "name": "Finance Audit VPN",
             "type": "access",
             "description": "VPN access for Financial Auditors",
@@ -161,7 +161,7 @@ async def seed_db():
             "is_active": True
         },
         {
-            "_id": "pol_sec_vpn",
+            "pol_id": "POL-SEC00001",
             "name": "Security Ops VPN",
             "type": "access",
             "description": "Unrestricted VPN access for Security Admins",
@@ -175,20 +175,36 @@ async def seed_db():
 
     access_states_data = [
         {
-            "_id": "S1001",
+            "user_id": "S1001",
             "vpn_access": ["vpn_sec", "vpn_hr", "vpn_eng", "vpn_fin"]
         },
         {
-            "_id": "H1001",
+            "user_id": "H1001",
             "vpn_access": ["vpn_hr"]
         },
         {
-            "_id": "U1001",
+            "user_id": "U1001",
             "vpn_access": ["vpn_eng"]
         },
         {
-            "_id": "F1002",
+            "user_id": "U1002",
+            "vpn_access": []
+        },
+        {
+            "user_id": "U1003",
+            "vpn_access": []
+        },
+        {
+            "user_id": "F1001",
+            "vpn_access": []
+        },
+        {
+            "user_id": "F1002",
             "vpn_access": ["vpn_fin"]
+        },
+        {
+            "user_id": "S1002",
+            "vpn_access": ["vpn_sec"]
         }
     ]
     await db.access_states.insert_many(access_states_data)

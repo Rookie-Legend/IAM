@@ -14,9 +14,10 @@ import asyncio
 from datetime import datetime
 from groq import Groq
 from app.core.config import settings
-from app.services.rag.identity_rag import fetch_identity_context
-from app.services.rag.policy_rag import fetch_policy_context
-from app.services.rag.audit_rag import fetch_audit_context
+from app.rag.identity_context import fetch_identity_context
+from app.rag.policy_context import fetch_policy_context
+from app.rag.audit_context import fetch_audit_context
+from app.rag.user_access_rag import refresh_policy_index
 
 # --------------------------------------------------------------------------- #
 #  Groq client (singleton)
@@ -277,26 +278,24 @@ async def execute_decision(
     result: dict,
 ) -> None:
     """Apply DB side-effects and write to audit_logs."""
-    user_id = current_user.id
+    user_id = current_user.user_id
     now = datetime.utcnow()
 
     if decision == "ACCEPT":
-        # Grant the resource / VPN in access_states
-        state = await db["access_states"].find_one({"_id": user_id})
+        state = await db["access_states"].find_one({"user_id": user_id})
         if state:
-            # Only add if not already present
             field = "vpn_access" if "vpn" in (requested_resource or "") else "resources"
             existing = state.get(field, [])
             if requested_resource and requested_resource not in existing:
                 existing.append(requested_resource)
                 await db["access_states"].update_one(
-                    {"_id": user_id},
+                    {"user_id": user_id},
                     {"$set": {field: existing}},
                 )
         else:
             field = "vpn_access" if "vpn" in (requested_resource or "") else "resources"
             await db["access_states"].insert_one(
-                {"_id": user_id, "vpn_access": [], "resources": [], field: [requested_resource]}
+                {"user_id": user_id, "vpn_access": [], "resources": [], field: [requested_resource]}
             )
 
     elif decision == "ESCALATE":
@@ -392,12 +391,12 @@ async def handle_simple_intent(
         return USER_HELP_TEXT
 
     if intent == "query_self_access":
-        state = await db["access_states"].find_one({"_id": current_user.id}) or {}
+        state = await db["access_states"].find_one({"user_id": current_user.user_id}) or {}
         vpns = ", ".join(state.get("vpn_access", [])) or "None"
         resources = ", ".join(state.get("resources", [])) or "None"
         
         system_content = _PROFILE_QUERY_PROMPT.format(
-            user_id=current_user.id,
+            user_id=current_user.user_id,
             role=current_user.role,
             department=current_user.department,
             vpns=vpns,
@@ -475,23 +474,27 @@ async def user_chat(
     requested_resource = intent_data.get("requested_resource", "unspecified")
     reason = intent_data.get("reason", "")
 
-    # --- Steps 2: fetch all 3 RAG contexts in parallel ---
+    # --- Step 2: Refresh policy index for vector-based search ---
+    await refresh_policy_index(db)
+
+    # --- Step 3: fetch all 3 RAG contexts in parallel ---
+    search_query = f"{requested_resource} {reason}" if reason else requested_resource
     identity_ctx, policy_ctx, audit_ctx = await asyncio.gather(
-        fetch_identity_context(current_user.id, db),
-        fetch_policy_context(current_user.id, current_user.department, db),
-        fetch_audit_context(current_user.id, db),
+        fetch_identity_context(current_user.user_id, db),
+        fetch_policy_context(current_user.user_id, current_user.department, db, query=search_query),
+        fetch_audit_context(current_user.user_id, db, search_query=search_query),
     )
 
-    # --- Step 3: LLM decision ---
+    # --- Step 4: LLM decision ---
     result = await make_access_decision(
         user_message, requested_resource, reason,
         identity_ctx, policy_ctx, audit_ctx,
     )
     decision = result.get("decision", "DENY")
 
-    # --- Step 4: execute (DB mutations + audit log) ---
+    # --- Step 5: execute (DB mutations + audit log) ---
     await execute_decision(decision, requested_resource, reason, current_user, db, result)
 
-    # --- Step 5: format and return ---
+    # --- Step 6: format and return ---
     response = format_decision_response(result, requested_resource)
     return response, intent_data

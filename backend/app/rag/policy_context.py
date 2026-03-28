@@ -1,23 +1,29 @@
 """
-Policy RAG — fetches the user's department policy from MongoDB.
+Unified RAG - Policy Context
+Fetches the user's department policy from MongoDB with vector-based semantic search.
 Returns a structured text context block describing allowed VPNs and resources.
 """
+from app.rag.vector_store import search_similar_policies
 
 
-async def fetch_policy_context(user_id: str, department: str, db) -> str:
+async def fetch_policy_context(user_id: str, department: str, db, query: str = None) -> str:
     """
     Find policies that match this user's department/team and summarise allowed access.
+    Uses vector similarity search when a query is provided for better context matching.
     Returns a formatted string for use as LLM context.
     """
     dept_lower = department.lower().strip() if department else ""
 
-    # Search all active policies and find ones that cover this department / team
+    if query:
+        policy_chunks = await search_similar_policies(query, db, top_k=5)
+        if policy_chunks:
+            return "POLICY CONTEXT (semantic search):\n" + "\n".join(f"- {c}" for c in policy_chunks)
+
     all_policies = await db["policies"].find({"is_active": True}).to_list(length=100)
 
     matched = []
     for policy in all_policies:
         rules = policy.get("rules", {})
-        # Policies can store team/department in various keys
         policy_team = (
             rules.get("team", "")
             or rules.get("department", "")
@@ -27,9 +33,8 @@ async def fetch_policy_context(user_id: str, department: str, db) -> str:
             matched.append(policy)
 
     if not matched:
-        # Fallback: return all policies as generic context
         if all_policies:
-            policy_names = ", ".join(p.get("name", p.get("_id", "?")) for p in all_policies)
+            policy_names = ", ".join(p.get("name", p.get("pol_id", "?")) for p in all_policies)
             return (
                 "POLICY CONTEXT:\n"
                 f"- Department: {department}\n"
@@ -46,7 +51,6 @@ async def fetch_policy_context(user_id: str, department: str, db) -> str:
             "- Allowed Resources: none"
         )
 
-    # Use the first (most specific) matched policy
     policy = matched[0]
     rules = policy.get("rules", {})
 
@@ -57,7 +61,7 @@ async def fetch_policy_context(user_id: str, department: str, db) -> str:
     lines = [
         "POLICY CONTEXT:",
         f"- Department: {department}",
-        f"- Assigned Policy: {policy.get('name', policy.get('_id', 'Unknown'))}",
+        f"- Assigned Policy: {policy.get('name', policy.get('pol_id', 'Unknown'))}",
         f"- Policy Type: {policy.get('type', 'access')}",
         f"- Allowed VPNs: {', '.join(allowed_vpns) if allowed_vpns else 'none'}",
         f"- Allowed Resources: {', '.join(allowed_resources) if allowed_resources else 'none'}",

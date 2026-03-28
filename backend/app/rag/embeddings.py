@@ -37,10 +37,8 @@ async def index_logs_to_db(db, chunks: list[str]) -> int:
     if not chunks:
         return 0
 
-    # Run embedding in a thread (CPU-bound)
     embeddings = await asyncio.to_thread(embed_texts, chunks)
 
-    # Clear the old index and re-insert (simple full refresh approach)
     await db["rag_chunks"].delete_many({})
     docs = [
         {"text": chunk, "embedding": emb}
@@ -48,3 +46,22 @@ async def index_logs_to_db(db, chunks: list[str]) -> int:
     ]
     await db["rag_chunks"].insert_many(docs)
     return len(docs)
+
+
+async def index_docs_to_collection(db, collection_name: str, docs: list[str]) -> int:
+    """
+    Generic indexer that embeds documents and stores them in any collection.
+    Returns the number of documents indexed.
+    """
+    if not docs:
+        return 0
+
+    embeddings = await asyncio.to_thread(embed_texts, docs)
+
+    await db[collection_name].delete_many({})
+    indexed_docs = [
+        {"text": doc, "embedding": emb}
+        for doc, emb in zip(docs, embeddings)
+    ]
+    await db[collection_name].insert_many(indexed_docs)
+    return len(indexed_docs)

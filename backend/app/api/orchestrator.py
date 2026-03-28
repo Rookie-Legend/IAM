@@ -13,16 +13,17 @@ class AccessRequestModel(BaseModel):
 
 @router.get("/access/{user_id}")
 async def get_access_state(user_id: str, db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
-    if current_user.id != user_id and current_user.role not in ["Security Admin", "admin"]:
+    if current_user.user_id != user_id and current_user.role not in ["Security Admin", "admin"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    state = await db["access_states"].find_one({"_id": user_id})
+    state = await db["access_states"].find_one({"user_id": user_id})
     if not state:
         raise HTTPException(status_code=404, detail="Access state not found")
+    state.pop("_id", None)
     return state
 
 @router.post("/request-access")
 async def request_access(request: AccessRequestModel, db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
-    user = await db["users"].find_one({"_id": request.user_id})
+    user = await db["users"].find_one({"user_id": request.user_id})
     if request.resource_id == "critical_server":
         return {"status": "MFA_CHALLENGE", "message": "Step-up authentication required"}
     if user and "admin" in request.resource_id and user.get("role") not in ["Security Admin", "admin"]:

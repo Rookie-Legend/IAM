@@ -232,10 +232,10 @@ For update_policy:
 async def generate_user_id(db, department: str) -> str:
     prefix = _get_prefix_for_department(department)
     pattern = f"^{prefix}\\d+$"
-    users = await db["users"].find({}, {"_id": 1}).to_list(length=None)
+    users = await db["users"].find({}, {"user_id": 1}).to_list(length=None)
     existing = []
     for u in users:
-        uid = u["_id"]
+        uid = u.get("user_id", u["_id"])
         if uid.startswith(prefix):
             try:
                 num = int(uid[len(prefix):])
@@ -305,12 +305,12 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         email = entities.get("email") or f"{name.lower().replace(' ', '.')}@company.com"
         role = entities.get("role", "software_engineer")
 
-        existing = await db["users"].find_one({"_id": user_id})
+        existing = await db["users"].find_one({"user_id": user_id})
         if existing:
             return f"⚠️ User **{user_id}** already exists in the directory."
 
         new_user = {
-            "_id": user_id,
+            "user_id": user_id,
             "username": user_id,
             "email": email,
             "full_name": name,
@@ -322,7 +322,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             "hashed_password": get_password_hash("TempPass@123")
         }
         await db["users"].insert_one(new_user)
-        await db["access_states"].insert_one({"_id": user_id, "vpn_access": []})
+        await db["access_states"].insert_one({"user_id": user_id, "vpn_access": []})
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "joiner",
@@ -350,16 +350,16 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         if not new_dept:
             return "Which **department** should I move this employee to?"
 
-        user = await db["users"].find_one({"_id": user_id})
+        user = await db["users"].find_one({"user_id": user_id})
         if not user:
             return f"❌ User **{user_id}** not found in the directory."
 
         await db["users"].update_one(
-            {"_id": user_id},
+            {"user_id": user_id},
             {"$set": {"department": new_dept, "role": new_role or user.get("role", "software_engineer")}}
         )
         await db["access_states"].update_one(
-            {"_id": user_id},
+            {"user_id": user_id},
             {"$set": {"vpn_access": []}}
         )
         old_dept = user.get('department', 'unknown')
@@ -388,15 +388,15 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         if not user_id:
             return "I need the **User ID** to offboard an employee. Please provide it."
 
-        user = await db["users"].find_one({"_id": user_id})
+        user = await db["users"].find_one({"user_id": user_id})
         if not user:
             return f"❌ User **{user_id}** not found."
 
         if user.get("disabled"):
             return f"⚠️ **{user_id}** is already disabled/offboarded."
 
-        await db["users"].update_one({"_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
-        await db["access_states"].update_one({"_id": user_id}, {"$set": {"vpn_access": []}})
+        await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
+        await db["access_states"].update_one({"user_id": user_id}, {"$set": {"vpn_access": []}})
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "leaver",
@@ -417,15 +417,15 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         if not user_id:
             return "I need the **User ID** to disable a user. Please provide it."
 
-        user = await db["users"].find_one({"_id": user_id})
+        user = await db["users"].find_one({"user_id": user_id})
         if not user:
             return f"❌ User **{user_id}** not found."
 
         if user.get("disabled"):
             return f"⚠️ **{user_id}** is already disabled."
 
-        await db["users"].update_one({"_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
-        await db["access_states"].update_one({"_id": user_id}, {"$set": {"vpn_access": []}})
+        await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
+        await db["access_states"].update_one({"user_id": user_id}, {"$set": {"vpn_access": []}})
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "disable_user",
@@ -446,14 +446,14 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         if not user_id:
             return "I need the **User ID** to reinstate an employee."
 
-        user = await db["users"].find_one({"_id": user_id})
+        user = await db["users"].find_one({"user_id": user_id})
         if not user:
             return f"❌ User **{user_id}** not found."
 
         if user.get("status") == "active" and not user.get("disabled"):
             return f"⚠️ **{user_id}** is already active."
 
-        await db["users"].update_one({"_id": user_id}, {"$set": {"status": "active", "disabled": False}})
+        await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "active", "disabled": False}})
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "reinstate",
@@ -481,7 +481,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             role = emp.get("role", "software_engineer")
 
             new_user = {
-                "_id": user_id,
+                "user_id": user_id,
                 "username": user_id,
                 "email": email,
                 "full_name": name,
@@ -493,7 +493,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 "hashed_password": get_password_hash("TempPass@123")
             }
             await db["users"].insert_one(new_user)
-            await db["access_states"].insert_one({"_id": user_id, "vpn_access": []})
+            await db["access_states"].insert_one({"user_id": user_id, "vpn_access": []})
             await db["audit_logs"].insert_one({
                 "user_id": "admin",
                 "action": "joiner",
@@ -501,7 +501,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 "details": f"{name} ({user_id}) joined the {dept} department as {role} via bulk onboarding. Email: {email}.",
                 "timestamp": datetime.utcnow()
             })
-            results.append(f"✅ {name} ({user_id}) → {dept}")
+            results.append(f"✅ {name} ({user_id}) -> {dept}")
 
         return (
             f"**Bulk Onboarding Complete — {len(employees)} employees**\n\n"
@@ -515,12 +515,12 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
 
         results = []
         for uid in user_ids:
-            user = await db["users"].find_one({"_id": uid})
+            user = await db["users"].find_one({"user_id": uid})
             if not user:
                 results.append(f"⚠️ {uid} — not found")
                 continue
-            await db["users"].update_one({"_id": uid}, {"$set": {"status": "inactive", "disabled": True}})
-            await db["access_states"].update_one({"_id": uid}, {"$set": {"vpn_access": []}})
+            await db["users"].update_one({"user_id": uid}, {"$set": {"status": "inactive", "disabled": True}})
+            await db["access_states"].update_one({"user_id": uid}, {"$set": {"vpn_access": []}})
             await db["audit_logs"].insert_one({
                 "user_id": "admin",
                 "action": "leaver",
@@ -552,7 +552,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         for u in users:
             status_icon = "🟢" if u.get("status") == "active" else "🔴"
             lines.append(
-                f"{status_icon} **{u['_id']}** — {u.get('full_name', '')} | "
+                f"{status_icon} **{u.get('user_id', 'N/A')}** — {u.get('full_name', '')} | "
                 f"{u.get('department', '')} | {u.get('role', '')} | {u.get('status', '')}"
             )
 
@@ -721,7 +721,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         policy_id = f"POL-{str(uuid.uuid4())[:8].upper()}"
         now = datetime.utcnow()
         doc = {
-            "_id": policy_id,
+            "pol_id": policy_id,
             "name": name,
             "type": policy_type,
             "description": description,
@@ -763,7 +763,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         for p in policies:
             active_icon = "🟢" if p.get("is_active") else "🔴"
             lines.append(
-                f"{active_icon} **{p['_id']}** — {p.get('name', 'Unnamed')} "
+                f"{active_icon} **{p.get('pol_id', 'N/A')}** — {p.get('name', 'Unnamed')} "
                 f"| Type: {p.get('type', '-')} | Dept: {p.get('department', '-')} | VPN: {p.get('vpn', '-')}"
             )
         return "\n".join(lines)
@@ -774,13 +774,13 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         if not policy_id and name_hint:
             found = await db["policies"].find_one({"name": {"$regex": name_hint, "$options": "i"}})
             if found:
-                policy_id = found["_id"]
+                policy_id = found["pol_id"]
         if not policy_id:
             return "Please provide the **Policy ID** (e.g. POL-XXXXXXXX) or the exact policy name to delete."
-        policy = await db["policies"].find_one({"_id": policy_id})
+        policy = await db["policies"].find_one({"pol_id": policy_id})
         if not policy:
             return f"❌ Policy **{policy_id}** not found."
-        await db["policies"].delete_one({"_id": policy_id})
+        await db["policies"].delete_one({"pol_id": policy_id})
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "delete_policy",
@@ -796,10 +796,10 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         if not policy_id and name_hint:
             found = await db["policies"].find_one({"name": {"$regex": name_hint, "$options": "i"}})
             if found:
-                policy_id = found["_id"]
+                policy_id = found["pol_id"]
         if not policy_id:
             return "Please provide the **Policy ID** (e.g. POL-XXXXXXXX) or policy name to update."
-        existing = await db["policies"].find_one({"_id": policy_id})
+        existing = await db["policies"].find_one({"pol_id": policy_id})
         if not existing:
             return f"❌ Policy **{policy_id}** not found."
         updates = {"updated_on": datetime.utcnow()}
@@ -809,7 +809,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 if field == "type" and val not in ("jml", "access", "mfa"):
                     continue
                 updates[field] = val
-        await db["policies"].update_one({"_id": policy_id}, {"$set": updates})
+        await db["policies"].update_one({"pol_id": policy_id}, {"$set": updates})
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "update_policy",

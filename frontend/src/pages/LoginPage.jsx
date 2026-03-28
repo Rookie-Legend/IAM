@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faSun, faMoon, faRocket, faEnvelope, faCheck } from '@fortawesome/free-solid-svg-icons';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { apiUrl } from '../stores/configStore';
 
 const maskEmail = (email) => {
     if (!email) return '';
@@ -51,7 +50,7 @@ const LoginPage = ({ onLogin }) => {
             formData.append('username', username);
             formData.append('password', password);
 
-            const res = await fetch(`${API}/api/auth/login`, {
+            const res = await fetch(apiUrl('/api/auth/login'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData.toString()
@@ -63,7 +62,7 @@ const LoginPage = ({ onLogin }) => {
             }
 
             const token = data.access_token;
-            const meRes = await fetch(`${API}/api/users/me`, {
+            const meRes = await fetch(apiUrl('/api/users/me'), {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (!meRes.ok) {
@@ -84,7 +83,7 @@ const LoginPage = ({ onLogin }) => {
         setLoading(true);
         setError('');
         try {
-            const res = await fetch(`${API}/api/auth/verify-invite-token`, {
+            const res = await fetch(apiUrl('/api/auth/verify-invite-token'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ token: inviteToken })
@@ -96,7 +95,7 @@ const LoginPage = ({ onLogin }) => {
             }
             setInviteData(data);
 
-            const otpRes = await fetch(`${API}/api/auth/request-registration-otp`, {
+            const otpRes = await fetch(apiUrl('/api/auth/request-registration-otp'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ token: inviteToken })
@@ -118,7 +117,7 @@ const LoginPage = ({ onLogin }) => {
         setLoading(true);
         setError('');
         try {
-            const res = await fetch(`${API}/api/auth/request-registration-otp`, {
+            const res = await fetch(apiUrl('/api/auth/request-registration-otp'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ token: inviteToken })
@@ -141,7 +140,7 @@ const LoginPage = ({ onLogin }) => {
         setLoading(true);
         setError('');
         try {
-            const res = await fetch(`${API}/api/auth/verify-registration-otp`, {
+            const res = await fetch(apiUrl('/api/auth/verify-registration-otp'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ token: inviteToken, otp })
@@ -169,7 +168,7 @@ const LoginPage = ({ onLogin }) => {
         setLoading(true);
         setError('');
         try {
-            const res = await fetch(`${API}/api/auth/complete-registration`, {
+            const res = await fetch(apiUrl('/api/auth/complete-registration'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faShieldHalved, faLock } from '@fortawesome/free-solid-svg-icons';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { apiUrl } from '../stores/configStore';
 
 const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
     const [vpns, setVpns] = useState([]);
@@ -45,7 +44,7 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
 
     const fetchVpns = async () => {
         try {
-            const res = await fetch(`${API}/api/vpn/available`, {
+            const res = await fetch(apiUrl('/api/vpn/available'), {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await res.json();
@@ -58,14 +57,14 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
     const handleConnect = async (vpnId) => {
         setLoading(true);
         try {
-            const res = await fetch(`${API}/api/vpn/provision/${vpnId}`, {
+            const res = await fetch(apiUrl(`/api/vpn/provision/${vpnId}`), {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await res.json();
             if (res.ok) {
                 try {
-                    const dlRes = await fetch(`${API}/api/vpn/download-profile`, {
+                    const dlRes = await fetch(apiUrl('/api/vpn/download-profile'), {
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
                     if (dlRes.ok) {
@@ -73,7 +72,7 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
                         const url = window.URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.href = url;
-                        a.download = `${user.id || user._id || user.username}-${vpnId}.ovpn`;
+                        a.download = `${user.user_id || user.username}-${vpnId}.ovpn`;
                         document.body.appendChild(a);
                         a.click();
                         a.remove();

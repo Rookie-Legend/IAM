@@ -19,7 +19,7 @@ class PolicyCreate(PolicyBase):
     pass
 
 class Policy(PolicyBase):
-    id: str = Field(alias="_id")
+    pol_id: str = Field(alias="pol_id")
     created_on: datetime = Field(default_factory=datetime.utcnow)
     updated_on: datetime = Field(default_factory=datetime.utcnow)
 

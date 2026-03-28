@@ -5,7 +5,7 @@ class AccessStateBase(BaseModel):
     vpn_access: List[str] = []
 
 class AccessStateInDB(AccessStateBase):
-    user_id: str = Field(alias="_id")
+    user_id: str = Field(alias="user_id")
 
     class Config:
         populate_by_name = True

@@ -10,8 +10,7 @@ import {
   faUserPlus,
   faRightFromBracket
 } from '@fortawesome/free-solid-svg-icons';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { apiUrl } from '../stores/configStore';
 
 const TYPE_COLORS = { jml: '#22c55e', access: '#3b82f6', mfa: '#f59e0b' };
 const STATUS_COLORS = { active: '#22c55e', inactive: '#ef4444', disabled: '#f59e0b' };
@@ -47,7 +46,7 @@ const AdminDashboard = ({ token }) => {
 
   const fetchPolicies = async () => {
     try {
-      const res = await fetch(`${API}/api/policies/`, { headers: { 'Authorization': `Bearer ${token}` } });
+      const res = await fetch(apiUrl('/api/policies/'), { headers: { 'Authorization': `Bearer ${token}` } });
       const data = await res.json();
       setPolicies(Array.isArray(data) ? data : []);
     } catch (e) {
@@ -57,14 +56,14 @@ const AdminDashboard = ({ token }) => {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch(`${API}/api/admin/dashboard`, { headers: { 'Authorization': `Bearer ${token}` } });
+      const res = await fetch(apiUrl('/api/admin/dashboard'), { headers: { 'Authorization': `Bearer ${token}` } });
       if (res.ok) setStats(await res.json());
     } catch (e) { }
   };
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch(`${API}/api/admin/users`, { headers: authHeaders });
+      const res = await fetch(apiUrl('/api/admin/users'), { headers: authHeaders });
       if (res.ok) {
         const data = await res.json();
         setUsers(Array.isArray(data) ? data : []);
@@ -78,7 +77,7 @@ const AdminDashboard = ({ token }) => {
       return;
     }
 
-    const url = editingId ? `${API}/api/policies/${editingId}` : `${API}/api/policies`;
+    const url = editingId ? apiUrl(`/api/policies/${editingId}`) : apiUrl('/api/policies');
     const method = editingId ? 'PUT' : 'POST';
 
     await fetch(url, { method, headers: authHeaders, body: JSON.stringify(newPolicy) });
@@ -90,7 +89,7 @@ const AdminDashboard = ({ token }) => {
   };
 
   const handleEdit = (p) => {
-    setEditingId(p._id);
+    setEditingId(p.pol_id);
     setNewPolicy({ 
       name: p.name, 
       type: p.type, 
@@ -104,7 +103,12 @@ const AdminDashboard = ({ token }) => {
 
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this policy?')) return;
-    await fetch(`${API}/api/policies/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+    await fetch(apiUrl(`/api/policies/${id}`), { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+    fetchPolicies();
+  };
+
+  const handleToggle = async (id, currentStatus) => {
+    await fetch(apiUrl(`/api/policies/${id}/toggle`), { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}` } });
     fetchPolicies();
   };
 
@@ -127,7 +131,7 @@ const AdminDashboard = ({ token }) => {
     setConfirmModal({ isOpen: false, action: null, userId: null, inputValue: '' });
     
     try {
-      await fetch(`${API}/api/admin/users/${userId}/${action}`, { method: 'POST', headers: authHeaders });
+      await fetch(apiUrl(`/api/admin/users/${userId}/${action}`), { method: 'POST', headers: authHeaders });
       fetchUsers();
       fetchStats();
     } catch (err) {
@@ -142,7 +146,7 @@ const AdminDashboard = ({ token }) => {
   const filteredUsers = users.filter(u => {
     const term = searchTerm.toLowerCase();
     return (
-      (u._id || '').toLowerCase().includes(term) ||
+      (u.user_id || '').toLowerCase().includes(term) ||
       (u.full_name || '').toLowerCase().includes(term) ||
       (u.department || '').toLowerCase().includes(term) ||
       (u.role || '').toLowerCase().includes(term) ||
@@ -226,8 +230,8 @@ const AdminDashboard = ({ token }) => {
               </thead>
               <tbody>
                 {filteredUsers.map(u => (
-                  <tr key={u._id} className="border-b border-border-subtle hover:bg-white/5 transition-all">
-                    <td className="px-4 py-3 font-mono text-xs">{u._id}</td>
+                  <tr key={u.user_id} className="border-b border-border-subtle hover:bg-white/5 transition-all">
+                    <td className="px-4 py-3 font-mono text-xs">{u.user_id}</td>
                     <td className="px-4 py-3">
                       <div className="font-medium">{u.full_name || 'N/A'}</div>
                       <div className="text-xs text-text-muted">{u.email}</div>
@@ -249,7 +253,7 @@ const AdminDashboard = ({ token }) => {
                       <div className="flex gap-2">
                         {u.disabled ? (
                           <button
-                            onClick={() => handleUserActionClick(u._id, 'reinstate')}
+                            onClick={() => handleUserActionClick(u.user_id, 'reinstate')}
                             className="px-3 py-1.5 rounded text-xs font-semibold bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-all flex items-center gap-1"
                             title="Reinstate user"
                           >
@@ -259,7 +263,7 @@ const AdminDashboard = ({ token }) => {
                         ) : (
                           <>
                             <button
-                              onClick={() => handleUserActionClick(u._id, 'disable')}
+                              onClick={() => handleUserActionClick(u.user_id, 'disable')}
                               className="px-3 py-1.5 rounded text-xs font-semibold bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 transition-all flex items-center gap-1"
                               title="Disable user"
                             >
@@ -267,7 +271,7 @@ const AdminDashboard = ({ token }) => {
                               Disable
                             </button>
                             <button
-                              onClick={() => handleUserActionClick(u._id, 'offboard')}
+                              onClick={() => handleUserActionClick(u.user_id, 'offboard')}
                               className="px-3 py-1.5 rounded text-xs font-semibold bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-all flex items-center gap-1"
                               title="Offboard user"
                             >
@@ -362,25 +366,38 @@ const AdminDashboard = ({ token }) => {
 
           {/* Policy List */}
           <div className="bg-surface border border-border-subtle rounded-xl p-6">
-            <h3 className="text-base font-semibold mb-4">Active Policies ({policies.length})</h3>
+            <h3 className="text-base font-semibold mb-4">All Policies ({policies.length})</h3>
             <div className="overflow-y-auto pr-1" style={{ maxHeight: 500 }}>
               {policies.map(p => (
-                <div key={p._id} className="mb-3 p-4 bg-elevated border border-border-subtle rounded-lg hover:border-border transition-all"
-                  style={{ borderLeftWidth: 4, borderLeftColor: TYPE_COLORS[p.type] || '#888' }}>
+                <div key={p.pol_id} className={`mb-3 p-4 border border-border-subtle rounded-lg transition-all ${p.is_active ? 'bg-white/5 hover:bg-white/10' : 'bg-gray-500/10 opacity-60'}`}
+                  style={{ borderLeftWidth: 4, borderLeftColor: p.is_active ? (TYPE_COLORS[p.type] || '#888') : '#ef4444' }}>
                   <div className="flex justify-between items-center mb-2">
-                    <span className="text-sm font-semibold">{p.name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold">{p.name}</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${p.is_active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                        {p.is_active ? 'ACTIVE' : 'INACTIVE'}
+                      </span>
+                    </div>
                     <div className="flex gap-2 items-center">
+                      <button 
+                        className={`p-1.5 rounded transition-all ${p.is_active ? 'hover:bg-yellow-500/20 text-yellow-400' : 'hover:bg-green-500/20 text-green-400'}`} 
+                        onClick={() => handleToggle(p.pol_id, p.is_active)}
+                        title={p.is_active ? 'Deactivate' : 'Activate'}
+                      >
+                        <FontAwesomeIcon icon={p.is_active ? faShieldHalved : faShieldHalved} />
+                      </button>
                       <button className="p-1.5 rounded hover:bg-white/10 transition-all" onClick={() => handleEdit(p)}><FontAwesomeIcon icon={faPencil} /></button>
-                      <button className="p-1.5 rounded hover:bg-error/10 transition-all" onClick={() => handleDelete(p._id)}><FontAwesomeIcon icon={faTrashCan} /></button>
+                      <button className="p-1.5 rounded hover:bg-error/10 transition-all text-error" onClick={() => handleDelete(p.pol_id)}><FontAwesomeIcon icon={faTrashCan} /></button>
                     </div>
                   </div>
                   <p className="text-[12px] text-text-muted mb-3">{p.description}</p>
-                  <pre className="text-[11px] text-text-muted bg-black/30 p-3 rounded overflow-auto" style={{ fontFamily: 'monospace' }}>
+                  <pre className="text-[11px] text-text-muted bg-black/20 p-3 rounded overflow-auto" style={{ fontFamily: 'monospace' }}>
                     {JSON.stringify({
-                      id: p._id,
+                      id: p.pol_id,
                       type: p.type,
                       department: p.department,
-                      vpn: p.vpn
+                      vpn: p.vpn,
+                      is_active: p.is_active
                     }, null, 2)}
                   </pre>
                 </div>

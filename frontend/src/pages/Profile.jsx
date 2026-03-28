@@ -1,34 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { 
-  faShieldHalved, 
-  faUsers, 
+import {
+  faShieldHalved,
+  faUsers,
   faClockRotateLeft,
   faShield
 } from '@fortawesome/free-solid-svg-icons';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { apiUrl } from '../stores/configStore';
 
 const Profile = ({ user, token, accessState }) => {
   const [deptMembers, setDeptMembers] = useState([]);
   const [vpns, setVpns] = useState([]);
 
   useEffect(() => {
-    // Backend only has /api/users/ (list all, admin only)
-    // Fall back gracefully if not admin
-    fetch(`${API}/api/users/`, {
+    fetch(apiUrl('/api/users/department/members'), {
       headers: { 'Authorization': `Bearer ${token}` }
     })
       .then(res => res.ok ? res.json() : [])
       .then(data => {
         const all = Array.isArray(data) ? data : [];
-        // Filter by same department as current user
-        setDeptMembers(all.filter(m => m.department === user.department));
+        setDeptMembers(all);
       })
       .catch(() => setDeptMembers([]));
 
     // Fetch available VPNs from API like VPNDashboard
-    fetch(`${API}/api/vpn/available`, {
+    fetch(apiUrl('/api/vpn/available'), {
       headers: { 'Authorization': `Bearer ${token}` }
     })
       .then(res => res.ok ? res.json() : [])
@@ -56,7 +52,7 @@ const Profile = ({ user, token, accessState }) => {
           <section className="bg-surface border border-border-subtle rounded-xl p-7">
             <div className="text-center mb-8">
               <div className="w-24 h-24 rounded-full bg-gradient-to-br from-accent-blue to-indigo-500 mx-auto mb-5 flex items-center justify-center text-4xl font-bold">
-                {user.username[0].toUpperCase()}
+                {(user.full_name || user.username)[0].toUpperCase()}
               </div>
               <h2 className="text-xl font-semibold mb-1">{user.full_name}</h2>
               <span className="text-xs opacity-60 uppercase tracking-wider">{user.role}</span>
@@ -65,7 +61,7 @@ const Profile = ({ user, token, accessState }) => {
             <div className="flex flex-col gap-3.5">
               <div className="p-3 bg-elevated rounded-lg border-l-[3px] border-accent-blue">
                 <span className="block text-[11px] opacity-50 mb-1">User ID</span>
-                <span className="font-mono text-accent-blue text-xs">{user._id || user.user_id}</span>
+                <span className="font-mono text-accent-blue text-xs">{user.user_id}</span>
               </div>
               <div className="p-3 bg-elevated rounded-lg border-l-[3px] border-accent-blue">
                 <span className="block text-[11px] opacity-50 mb-1">Department</span>
@@ -89,8 +85,8 @@ const Profile = ({ user, token, accessState }) => {
               {vpns.map(vpn => {
                 const active = vpn.accessible;
                 return (
-                  <div 
-                    key={vpn.id} 
+                  <div
+                    key={vpn.id}
                     className={`p-3 rounded-lg border transition-all ${active ? 'bg-accent-blue/8 border-accent-blue/30 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-white/1 border-white/3 opacity-40'}`}
                   >
                     <div className={`text-sm font-semibold ${active ? 'text-text' : 'text-text-muted'}`}>{vpn.name}</div>
@@ -102,14 +98,20 @@ const Profile = ({ user, token, accessState }) => {
           </section>
 
           <section className="bg-surface border border-border-subtle rounded-xl p-5">
-            <h4 className="text-xs uppercase opacity-70 mb-4"><FontAwesomeIcon icon={faUsers} className="mr-2" /> Department Members ({deptMembers.filter(m => m.username !== user.username).length})</h4>
+            <h4 className="text-xs uppercase opacity-70 mb-4"><FontAwesomeIcon icon={faUsers} className="mr-2" /> Department Members ({deptMembers.filter(m => m.user_id !== user.user_id).length})</h4>
+
             <div className="flex flex-col gap-2.5">
-              {deptMembers.filter(m => m.username !== user.username).slice(0, 5).map(m => (
-                <div key={m.username} className="flex items-center gap-2.5 text-sm">
-                  <div className="w-6 h-6 rounded-full bg-text-secondary/20 flex items-center justify-center text-[10px] text-text">
-                    {m.username[0].toUpperCase()}
+              {deptMembers.filter(m => m.user_id !== user.user_id).slice(0, 5).map(m => (
+                <div key={m.user_id} className="flex items-center justify-between gap-2.5 text-sm">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-6 h-6 rounded-full bg-text-secondary/20 flex items-center justify-center text-[10px] text-text">
+                      {m.full_name ? m.full_name[0].toUpperCase() : '?'}
+                    </div>
+                    <span>{m.full_name || m.user_id}</span>
                   </div>
-                  <span>{m.full_name}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${m.status === 'active' ? 'bg-green-500' : 'bg-gray-400'}`}></span>
+                  </div>
                 </div>
               ))}
               {deptMembers.length > 6 && <div className="text-[11px] opacity-40 text-center">+ {deptMembers.length - 6} more</div>}

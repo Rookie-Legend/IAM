@@ -26,61 +26,62 @@ async def list_all_users(db=Depends(get_database), admin=Depends(get_current_adm
     users = await cursor.to_list(length=500)
     for u in users:
         u["_id"] = str(u["_id"])
-        u["id"] = str(u["_id"])
+        u["user_id"] = str(u.get("user_id", u["_id"]))
+        u["id"] = str(u.get("user_id", u["_id"]))
     return users
 
 @router.post("/users/{user_id}/disable")
 async def disable_user(user_id: str, db=Depends(get_database), admin=Depends(get_current_admin)):
-    user = await db["users"].find_one({"_id": user_id})
+    user = await db["users"].find_one({"user_id": user_id})
     if not user:
         return {"status": "error", "message": f"User {user_id} not found"}
     if user.get("disabled"):
         return {"status": "error", "message": f"User {user_id} is already disabled"}
-    await db["users"].update_one({"_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
-    await db["access_states"].update_one({"_id": user_id}, {"$set": {"vpn_access": []}})
+    await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
+    await db["access_states"].update_one({"user_id": user_id}, {"$set": {"vpn_access": []}})
     await db["audit_logs"].insert_one({
-        "user_id": admin.id,
+        "user_id": admin.user_id,
         "action": "disable_user",
         "target_user": user_id,
         "target_name": user.get("full_name", ""),
-        "details": f"Admin {admin.id} ({admin.role}) disabled user {user_id} ({user.get('full_name', '')}) from department {user.get('department', '')}",
+        "details": f"Admin {admin.user_id} ({admin.role}) disabled user {user_id} ({user.get('full_name', '')}) from department {user.get('department', '')}",
         "timestamp": datetime.utcnow()
     })
     return {"status": "success", "message": f"User {user_id} has been disabled"}
 
 @router.post("/users/{user_id}/reinstate")
 async def reinstate_user(user_id: str, db=Depends(get_database), admin=Depends(get_current_admin)):
-    user = await db["users"].find_one({"_id": user_id})
+    user = await db["users"].find_one({"user_id": user_id})
     if not user:
         return {"status": "error", "message": f"User {user_id} not found"}
     if not user.get("disabled"):
         return {"status": "error", "message": f"User {user_id} is already active"}
-    await db["users"].update_one({"_id": user_id}, {"$set": {"status": "active", "disabled": False}})
+    await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "active", "disabled": False}})
     await db["audit_logs"].insert_one({
-        "user_id": admin.id,
+        "user_id": admin.user_id,
         "action": "reinstate_user",
         "target_user": user_id,
         "target_name": user.get("full_name", ""),
-        "details": f"Admin {admin.id} ({admin.role}) reinstated user {user_id} ({user.get('full_name', '')}) - previously disabled",
+        "details": f"Admin {admin.user_id} ({admin.role}) reinstated user {user_id} ({user.get('full_name', '')}) - previously disabled",
         "timestamp": datetime.utcnow()
     })
     return {"status": "success", "message": f"User {user_id} has been reinstated"}
 
 @router.post("/users/{user_id}/offboard")
 async def offboard_user(user_id: str, db=Depends(get_database), admin=Depends(get_current_admin)):
-    user = await db["users"].find_one({"_id": user_id})
+    user = await db["users"].find_one({"user_id": user_id})
     if not user:
         return {"status": "error", "message": f"User {user_id} not found"}
     if user.get("disabled"):
         return {"status": "error", "message": f"User {user_id} is already offboarded/disabled"}
-    await db["users"].update_one({"_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
-    await db["access_states"].update_one({"_id": user_id}, {"$set": {"vpn_access": []}})
+    await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
+    await db["access_states"].update_one({"user_id": user_id}, {"$set": {"vpn_access": []}})
     await db["audit_logs"].insert_one({
-        "user_id": admin.id,
+        "user_id": admin.user_id,
         "action": "leaver",
         "target_user": user_id,
         "target_name": user.get("full_name", ""),
-        "details": f"Admin {admin.id} ({admin.role}) offboarded user {user_id} ({user.get('full_name', '')}) from department {user.get('department', '')}. All access revoked.",
+        "details": f"Admin {admin.user_id} ({admin.role}) offboarded user {user_id} ({user.get('full_name', '')}) from department {user.get('department', '')}. All access revoked.",
         "timestamp": datetime.utcnow()
     })
     return {"status": "success", "message": f"User {user_id} has been offboarded and all access revoked"}
@@ -105,16 +106,16 @@ async def approve_access_request(request_id: str, db=Depends(get_database), admi
     user_id = access_req.get("user_id")
     resource_type = access_req.get("resource_type")
     if user_id and resource_type:
-        state = await db["access_states"].find_one({"_id": user_id})
+        state = await db["access_states"].find_one({"user_id": user_id})
         if state:
             field = "vpn_access" if "vpn" in (resource_type or "") else "resources"
             existing = state.get(field, [])
             if resource_type not in existing:
                 existing.append(resource_type)
-                await db["access_states"].update_one({"_id": user_id}, {"$set": {field: existing}})
+                await db["access_states"].update_one({"user_id": user_id}, {"$set": {field: existing}})
         else:
             field = "vpn_access" if "vpn" in (resource_type or "") else "resources"
-            await db["access_states"].insert_one({"_id": user_id, "vpn_access": [], "resources": [], field: [resource_type]})
+            await db["access_states"].insert_one({"user_id": user_id, "vpn_access": [], "resources": [], field: [resource_type]})
         
         await db["audit_logs"].update_one(
             {"user_id": user_id, "target_resource": resource_type, "action": "ESCALATE"},
@@ -122,11 +123,11 @@ async def approve_access_request(request_id: str, db=Depends(get_database), admi
         )
     
     await db["audit_logs"].insert_one({
-        "user_id": admin.id,
+        "user_id": admin.user_id,
         "action": "approve_access",
         "target_resource": access_req.get("resource_type", "unknown") if access_req else request_id,
         "target_user": access_req.get("user_id", "") if access_req else "",
-        "details": f"Admin {admin.id} ({admin.role}) approved {access_req.get('resource_type', 'access')} request for user {access_req.get('user_id', '')}",
+        "details": f"Admin {admin.user_id} ({admin.role}) approved {access_req.get('resource_type', 'access')} request for user {access_req.get('user_id', '')}",
         "timestamp": datetime.utcnow()
     })
     return {"status": "success", "message": "Access request approved"}
@@ -149,11 +150,11 @@ async def deny_access_request(request_id: str, db=Depends(get_database), admin=D
         )
     
     await db["audit_logs"].insert_one({
-        "user_id": admin.id,
+        "user_id": admin.user_id,
         "action": "deny_access",
         "target_resource": access_req.get("resource_type", "unknown") if access_req else request_id,
         "target_user": access_req.get("user_id", "") if access_req else "",
-        "details": f"Admin {admin.id} ({admin.role}) denied {access_req.get('resource_type', 'access')} request for user {access_req.get('user_id', '')}",
+        "details": f"Admin {admin.user_id} ({admin.role}) denied {access_req.get('resource_type', 'access')} request for user {access_req.get('user_id', '')}",
         "timestamp": datetime.utcnow()
     })
     return {"status": "success", "message": "Access request denied"}

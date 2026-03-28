@@ -9,7 +9,7 @@ import numpy as np
 from app.rag.embeddings import embed_single
 
 
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
+def cosine_similarity(a: list[float], b: list[float]) -> float:
     va = np.array(a, dtype=np.float32)
     vb = np.array(b, dtype=np.float32)
     norm_a = np.linalg.norm(va)
@@ -17,6 +17,10 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return float(np.dot(va, vb) / (norm_a * norm_b))
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    return cosine_similarity(a, b)
 
 
 async def search_similar_logs(query: str, db, top_k: int = 8) -> list[str]:
@@ -68,3 +72,33 @@ async def retrieve_suspicious_logs(db, top_k: int = 12) -> list[str]:
         "fraud anomaly unauthorized"
     )
     return await search_similar_logs(fraud_keywords, db, top_k)
+
+
+async def search_similar(query: str, db, collection_name: str, top_k: int = 8) -> list[str]:
+    """
+    Generic similarity search over any collection's embeddings.
+    Embeds the query and returns top_k most similar texts.
+    """
+    query_emb = await asyncio.to_thread(embed_single, query)
+    cursor = db[collection_name].find({}, {"text": 1, "embedding": 1, "_id": 0})
+    chunks = await cursor.to_list(length=2000)
+
+    if not chunks:
+        return []
+
+    scored = []
+    for chunk in chunks:
+        emb = chunk.get("embedding")
+        if emb:
+            score = _cosine_similarity(query_emb, emb)
+            scored.append((score, chunk["text"]))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [text for _, text in scored[:top_k]]
+
+
+async def search_similar_policies(query: str, db, top_k: int = 5) -> list[str]:
+    """
+    Search policies using vector similarity for semantic matching.
+    """
+    return await search_similar(query, db, "policy_chunks", top_k)

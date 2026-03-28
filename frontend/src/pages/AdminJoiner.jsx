@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faUserPlus, faEnvelope } from '@fortawesome/free-solid-svg-icons';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { apiUrl } from '../stores/configStore';
 
 const AdminJoiner = ({ token }) => {
   const [formData, setFormData] = useState({
@@ -21,7 +20,7 @@ const AdminJoiner = ({ token }) => {
     setLoading(true);
     setMessage(null);
     try {
-      const res = await fetch(`${API}/api/jml/event`, {
+      const res = await fetch(apiUrl('/api/jml/event'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -54,7 +53,7 @@ const AdminJoiner = ({ token }) => {
     setLoading(true);
     setMessage(null);
     try {
-      const res = await fetch(`${API}/api/jml/invite`, {
+      const res = await fetch(apiUrl('/api/jml/invite'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

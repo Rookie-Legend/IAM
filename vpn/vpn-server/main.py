@@ -42,6 +42,9 @@ def download_config(username: str):
 def revoke_user(username: str):
     try:
         run_cmd(f"./easyrsa revoke {username}")
+        for f in [f"pki/reqs/{username}.req", f"pki/issued/{username}.crt", f"pki/private/{username}.key", f"{CONFIG_OUT_DIR}/{username}.ovpn"]:
+            if os.path.exists(f"{EASYRSA_DIR}/{f}"):
+                os.remove(f"{EASYRSA_DIR}/{f}")
         run_cmd("./easyrsa gen-crl")
         run_cmd("cp pki/crl.pem /etc/openvpn/crl.pem")
         run_cmd("chmod 644 /etc/openvpn/crl.pem")

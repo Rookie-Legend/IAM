@@ -14,7 +14,7 @@ class UserCreate(UserBase):
     password: str
 
 class UserInDB(UserBase):
-    id: str = Field(alias="_id")
+    user_id: str = Field(alias="user_id")
 
     class Config:
         populate_by_name = True

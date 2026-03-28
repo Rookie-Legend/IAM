@@ -13,8 +13,7 @@ import {
   faPaperPlane,
   faShield
 } from '@fortawesome/free-solid-svg-icons';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { apiUrl } from '../stores/configStore';
 
 function renderMarkdown(text) {
   if (!text) return '';
@@ -85,7 +84,7 @@ export default function ChatInterface({ user, token, messages, setMessages, acce
     setLoading(true);
 
     try {
-      const res = await fetch(`${API}/api/chatbot/query`, {
+      const res = await fetch(apiUrl('/api/chatbot/query'), {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
