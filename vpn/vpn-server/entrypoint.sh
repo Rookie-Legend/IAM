@@ -20,10 +20,15 @@ cp /app/server.conf /etc/openvpn/server.conf
 
 echo "Setting up iptables for department pools..."
 
-iptables -A FORWARD -i tun0 -d 125.20.0.0/16 -j ACCEPT
+# --- VPN internal traffic (client-to-client)
+iptables -A FORWARD -i tun0 -o tun0 -j ACCEPT
+
+# --- Allow VPN clients to access everything (backend, internet)
+iptables -A FORWARD -i tun0 -j ACCEPT
+
+iptables -t nat -A POSTROUTING -s 10.10.0.0/16 -o eth0 -j MASQUERADE
 
 iptables -A FORWARD -i eth0 -o tun0 -m state --state RELATED,ESTABLISHED -j ACCEPT
-iptables -A FORWARD -i tun0 -j DROP
 
 echo "Starting OpenVPN..."
 openvpn --config /etc/openvpn/server.conf --daemon

@@ -59,16 +59,10 @@ services:
     volumes:
       - vpn_master_data:/etc/openvpn
     networks:
-      default:
-      lab_network:
-        ipv4_address: 125.10.0.2
+      - default
 
 networks:
   default:
-  lab_network:
-    ipam:
-      config:
-        - subnet: 125.10.0.0/24
 
 volumes:
   mongodb_data:

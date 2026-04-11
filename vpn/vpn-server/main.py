@@ -57,7 +57,7 @@ async def allocate_ip(db, user_id, vpn_id):
             )
             os.makedirs(CCD_DIR, exist_ok=True)
             with open(f"{CCD_DIR}/{user_id}", "w") as f:
-                f.write(f"ifconfig-push {ip} {pool['gateway']}\n")
+                f.write(f"ifconfig-push {ip} 255.255.255.0\n")
             return ip, pool["name"]
     
     raise HTTPException(status_code=503, detail="No IPs available in pool")

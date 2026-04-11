@@ -253,50 +253,50 @@ async def seed_db():
     print("Seeded Access States")
 
     vpn_ip_pools_data = [
-        {
-            "pool_id": "vpn_eng",
-            "name": "Engineering VPN",
-            "department": "Engineering",
-            "subnet": "125.20.0.0/16",
-            "start_ip": "125.20.0.5",
-            "end_ip": "125.20.0.254",
-            "gateway": "125.20.0.1",
-            "assigned_ips": [],
-            "is_active": True
-        },
-        {
-            "pool_id": "vpn_fin",
-            "name": "Finance VPN",
-            "department": "Finance",
-            "subnet": "125.20.0.0/16",
-            "start_ip": "125.20.1.5",
-            "end_ip": "125.20.1.254",
-            "gateway": "125.20.1.1",
-            "assigned_ips": [],
-            "is_active": True
-        },
-        {
-            "pool_id": "vpn_hr",
-            "name": "HR VPN",
-            "department": "HR",
-            "subnet": "125.20.0.0/16",
-            "start_ip": "125.20.2.5",
-            "end_ip": "125.20.2.254",
-            "gateway": "125.20.2.1",
-            "assigned_ips": [],
-            "is_active": True
-        },
-        {
-            "pool_id": "vpn_sec",
-            "name": "Security VPN",
-            "department": "Security",
-            "subnet": "125.20.0.0/16",
-            "start_ip": "125.20.3.5",
-            "end_ip": "125.20.3.254",
-            "gateway": "125.20.3.1",
-            "assigned_ips": [],
-            "is_active": True
-        }
+    {
+        "pool_id": "vpn_eng",
+        "name": "Engineering VPN",
+        "department": "Engineering",
+        "subnet": "10.10.0.0/20",
+        "start_ip": "10.10.0.5",
+        "end_ip": "10.10.15.254",
+        "gateway": "10.10.0.1",
+        "next_ip": "10.10.0.5",
+        "is_active": True
+    },
+    {
+        "pool_id": "vpn_fin",
+        "name": "Finance VPN",
+        "department": "Finance",
+        "subnet": "10.10.16.0/20",
+        "start_ip": "10.10.16.5",
+        "end_ip": "10.10.31.254",
+        "gateway": "10.10.16.1",
+        "next_ip": "10.10.16.5",
+        "is_active": True
+    },
+    {
+        "pool_id": "vpn_hr",
+        "name": "HR VPN",
+        "department": "HR",
+        "subnet": "10.10.32.0/20",
+        "start_ip": "10.10.32.5",
+        "end_ip": "10.10.47.254",
+        "gateway": "10.10.32.1",
+        "next_ip": "10.10.32.5",
+        "is_active": True
+    },
+    {
+        "pool_id": "vpn_sec",
+        "name": "Security VPN",
+        "department": "Security",
+        "subnet": "10.10.48.0/20",
+        "start_ip": "10.10.48.5",
+        "end_ip": "10.10.63.254",
+        "gateway": "10.10.48.1",
+        "next_ip": "10.10.48.5",
+        "is_active": True
+    }
     ]
     await db.vpn_ip_pools.insert_many(vpn_ip_pools_data)
     print("Seeded VPN IP Pools")
