@@ -283,20 +283,33 @@ async def execute_decision(
 
     if decision == "ACCEPT":
         state = await db["access_states"].find_one({"user_id": user_id})
+        field = "vpn_access" if "vpn" in (requested_resource or "") else "resources"
         if state:
-            field = "vpn_access" if "vpn" in (requested_resource or "") else "resources"
             existing = state.get(field, [])
             if requested_resource and requested_resource not in existing:
                 existing.append(requested_resource)
                 await db["access_states"].update_one(
                     {"user_id": user_id},
-                    {"$set": {field: existing}},
+                    {"$set": {
+                        field: existing,
+                        "connected": False,
+                        "connected_vpn": None,
+                        "connected_ip": None,
+                        "connected_at": None,
+                        "last_disconnected_at": None
+                    }},
                 )
         else:
-            field = "vpn_access" if "vpn" in (requested_resource or "") else "resources"
-            await db["access_states"].insert_one(
-                {"user_id": user_id, "vpn_access": [], "resources": [], field: [requested_resource]}
-            )
+            await db["access_states"].insert_one({
+                "user_id": user_id,
+                "vpn_access": [requested_resource] if field == "vpn_access" else [],
+                "resources": [requested_resource] if field == "resources" else [],
+                "connected": False,
+                "connected_vpn": None,
+                "connected_ip": None,
+                "connected_at": None,
+                "last_disconnected_at": None
+            })
 
     elif decision == "ESCALATE":
         # Insert a pending access request for admin review

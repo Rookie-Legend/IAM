@@ -35,8 +35,6 @@ async def seed_db():
     await db.policies.drop()
     await db.access_states.drop()
     await db.audit_logs.drop()
-    await db.vpn_ip_pools.drop()
-    await db.vpn_sessions.drop()
     await db.vpn_audit_logs.drop()
 
     print("Collections dropped")
@@ -130,6 +128,7 @@ async def seed_db():
             "status": "active",
             "disabled": False
         }
+        
     ]
     await db.users.insert_many(users_data)
     print("Seeded Users")
@@ -182,8 +181,7 @@ async def seed_db():
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
-            "connected_at": None,
-            "last_disconnected_at": None
+            "connected_at": None
         },
         {
             "user_id": "H1001",
@@ -191,8 +189,7 @@ async def seed_db():
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
-            "connected_at": None,
-            "last_disconnected_at": None
+            "connected_at": None
         },
         {
             "user_id": "U1001",
@@ -200,8 +197,7 @@ async def seed_db():
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
-            "connected_at": None,
-            "last_disconnected_at": None
+            "connected_at": None
         },
         {
             "user_id": "U1002",
@@ -209,8 +205,7 @@ async def seed_db():
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
-            "connected_at": None,
-            "last_disconnected_at": None
+            "connected_at": None
         },
         {
             "user_id": "U1003",
@@ -218,8 +213,7 @@ async def seed_db():
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
-            "connected_at": None,
-            "last_disconnected_at": None
+            "connected_at": None
         },
         {
             "user_id": "F1001",
@@ -227,8 +221,7 @@ async def seed_db():
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
-            "connected_at": None,
-            "last_disconnected_at": None
+            "connected_at": None
         },
         {
             "user_id": "F1002",
@@ -236,8 +229,7 @@ async def seed_db():
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
-            "connected_at": None,
-            "last_disconnected_at": None
+            "connected_at": None
         },
         {
             "user_id": "S1002",
@@ -245,68 +237,16 @@ async def seed_db():
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
-            "connected_at": None,
-            "last_disconnected_at": None
+            "connected_at": None
         }
     ]
     await db.access_states.insert_many(access_states_data)
     print("Seeded Access States")
 
-    vpn_ip_pools_data = [
-        {
-            "pool_id": "vpn_eng",
-            "name": "Engineering VPN",
-            "department": "Engineering",
-            "subnet": "125.20.0.0/16",
-            "start_ip": "125.20.0.5",
-            "end_ip": "125.20.0.254",
-            "gateway": "125.20.0.1",
-            "assigned_ips": [],
-            "is_active": True
-        },
-        {
-            "pool_id": "vpn_fin",
-            "name": "Finance VPN",
-            "department": "Finance",
-            "subnet": "125.20.0.0/16",
-            "start_ip": "125.20.1.5",
-            "end_ip": "125.20.1.254",
-            "gateway": "125.20.1.1",
-            "assigned_ips": [],
-            "is_active": True
-        },
-        {
-            "pool_id": "vpn_hr",
-            "name": "HR VPN",
-            "department": "HR",
-            "subnet": "125.20.0.0/16",
-            "start_ip": "125.20.2.5",
-            "end_ip": "125.20.2.254",
-            "gateway": "125.20.2.1",
-            "assigned_ips": [],
-            "is_active": True
-        },
-        {
-            "pool_id": "vpn_sec",
-            "name": "Security VPN",
-            "department": "Security",
-            "subnet": "125.20.0.0/16",
-            "start_ip": "125.20.3.5",
-            "end_ip": "125.20.3.254",
-            "gateway": "125.20.3.1",
-            "assigned_ips": [],
-            "is_active": True
-        }
-    ]
-    await db.vpn_ip_pools.insert_many(vpn_ip_pools_data)
-    print("Seeded VPN IP Pools")
-
-    await db.vpn_sessions.create_index("user_id")
-    await db.vpn_sessions.create_index("is_active")
     await db.vpn_audit_logs.create_index("timestamp")
     await db.vpn_audit_logs.create_index("user_id")
     await db.vpn_audit_logs.create_index("event_type")
-    print("Created VPN sessions and audit logs indexes")
+    print("Created VPN audit logs indexes")
 
     print("Database seeding completed.")
 

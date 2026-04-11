@@ -81,7 +81,15 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
             "hashed_password": get_password_hash("TempPass@123")
         }
         await db["users"].insert_one(new_user)
-        await db["access_states"].insert_one({"user_id": request.user_id, "vpn_access": []})
+        await db["access_states"].insert_one({
+            "user_id": request.user_id,
+            "vpn_access": [],
+            "connected": False,
+            "connected_vpn": None,
+            "connected_ip": None,
+            "connected_at": None,
+            "last_disconnected_at": None
+        })
         await db["audit_logs"].insert_one({
             "user_id": admin.user_id,
             "action": "joiner",
@@ -95,7 +103,14 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
     elif request.event_type == "leaver":
         user = await db["users"].find_one({"user_id": request.user_id})
         await db["users"].update_one({"user_id": request.user_id}, {"$set": {"status": "inactive", "disabled": True}})
-        await db["access_states"].update_one({"user_id": request.user_id}, {"$set": {"vpn_access": []}})
+        await db["access_states"].update_one({"user_id": request.user_id}, {"$set": {
+            "vpn_access": [],
+            "connected": False,
+            "connected_vpn": None,
+            "connected_ip": None,
+            "connected_at": None,
+            "last_disconnected_at": datetime.utcnow()
+        }})
         await db["audit_logs"].insert_one({
             "user_id": admin.user_id,
             "action": "leaver",
@@ -120,7 +135,14 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
         )
         await db["access_states"].update_one(
             {"user_id": request.user_id},
-            {"$set": {"vpn_access": []}}
+            {"$set": {
+                "vpn_access": [],
+                "connected": False,
+                "connected_vpn": None,
+                "connected_ip": None,
+                "connected_at": None,
+                "last_disconnected_at": datetime.utcnow()
+            }}
         )
         await db["audit_logs"].insert_one({
             "user_id": admin.user_id,

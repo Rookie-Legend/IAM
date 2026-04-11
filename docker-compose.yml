@@ -8,6 +8,8 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+    networks:
+      - default
 
   backend:
     build: ./backend
@@ -16,14 +18,17 @@ services:
       - "8000:8000"
     environment:
       - MONGO_URL=mongodb://mongodb:27017
-      - SECRET_KEY=supersecretkey-change-in-prod
+      - DATABASE_NAME=iam_db
+      - SECRET_KEY=supersecretkey
       - ALGORITHM=HS256
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - VPN_SERVER_URL=http://vpn-server:8000
+      - VPN_SERVER_URL=http://vpn-server:4000
     depends_on:
       - mongodb
     volumes:
       - ./backend:/app
+    networks:
+      - default
 
   frontend:
     build: ./frontend
@@ -32,10 +37,18 @@ services:
       - "5173:5173"
     depends_on:
       - backend
+    networks:
+      - default
 
   vpn-server:
     build: ./vpn/vpn-server
     container_name: iam_vpn_server
+    environment:
+      - VPN_SERVER_IP=${VPN_SERVER_IP:-10.35.156.201}
+      - MONGO_URL=mongodb://mongodb:27017
+      - DATABASE_NAME=iam_db
+    depends_on:
+      - mongodb
     cap_add:
       - NET_ADMIN
     devices:
@@ -43,21 +56,12 @@ services:
     ports:
       - "4000:4000"
       - "1194:1194/udp"
+    volumes:
+      - vpn_master_data:/etc/openvpn
     networks:
       default:
       lab_network:
         ipv4_address: 125.10.0.2
-    volumes:
-      - vpn_master_data:/etc/openvpn
-
-  dev-server:
-    build: ./vpn/dev-server
-    container_name: dev-server
-    networks:
-      lab_network:
-        ipv4_address: 125.10.0.10
-    cap_add:
-      - NET_ADMIN
 
 networks:
   default:

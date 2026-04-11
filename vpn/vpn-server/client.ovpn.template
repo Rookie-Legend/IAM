@@ -1,8 +1,7 @@
 client
 dev tun
 proto udp
-#SET IP HERE 
-remote 10.35.156.201 1194
+remote YOUR_SERVER_IP 1194
 resolv-retry infinite
 nobind
 persist-key

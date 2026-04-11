@@ -17,15 +17,6 @@ services:
     volumes:
       - vpn_master_data:/etc/openvpn
 
-  server-a:
-    build: ./dev-server
-    container_name: server-1
-    networks:
-      lab_network:
-        ipv4_address: 125.10.0.10
-    cap_add:
-      - NET_ADMIN
-
 networks:
   lab_network:
     ipam:

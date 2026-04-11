@@ -55,7 +55,15 @@ async def register(user_in: UserCreate, db=Depends(get_database)):
     user_dict["user_id"] = user_in.username
     user_dict["hashed_password"] = hashed
     await db["users"].insert_one(user_dict)
-    await db["access_states"].insert_one({"user_id": user_dict["user_id"], "vpn_access": []})
+    await db["access_states"].insert_one({
+        "user_id": user_dict["user_id"],
+        "vpn_access": [],
+        "connected": False,
+        "connected_vpn": None,
+        "connected_ip": None,
+        "connected_at": None,
+        "last_disconnected_at": None
+    })
     return {"status": "success", "message": "User registered successfully"}
 
 class VerifyTokenRequest(BaseModel):
@@ -145,7 +153,15 @@ async def complete_registration(request: CompleteRegistrationRequest, db=Depends
         "hashed_password": hashed
     }
     await db["users"].insert_one(user_dict)
-    await db["access_states"].insert_one({"user_id": new_user_id, "vpn_access": []})
+    await db["access_states"].insert_one({
+        "user_id": new_user_id,
+        "vpn_access": [],
+        "connected": False,
+        "connected_vpn": None,
+        "connected_ip": None,
+        "connected_at": None,
+        "last_disconnected_at": None
+    })
 
     await db["invites"].update_one({"token": request.token}, {"$set": {"status": "completed"}})
     await db["otp_store"].delete_one({"user_id": f"invite_{request.token}"})

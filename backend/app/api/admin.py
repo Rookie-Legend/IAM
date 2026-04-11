@@ -38,7 +38,14 @@ async def disable_user(user_id: str, db=Depends(get_database), admin=Depends(get
     if user.get("disabled"):
         return {"status": "error", "message": f"User {user_id} is already disabled"}
     await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
-    await db["access_states"].update_one({"user_id": user_id}, {"$set": {"vpn_access": []}})
+    await db["access_states"].update_one({"user_id": user_id}, {"$set": {
+        "vpn_access": [],
+        "connected": False,
+        "connected_vpn": None,
+        "connected_ip": None,
+        "connected_at": None,
+        "last_disconnected_at": datetime.utcnow()
+    }})
     await db["audit_logs"].insert_one({
         "user_id": admin.user_id,
         "action": "disable_user",
@@ -75,7 +82,14 @@ async def offboard_user(user_id: str, db=Depends(get_database), admin=Depends(ge
     if user.get("disabled"):
         return {"status": "error", "message": f"User {user_id} is already offboarded/disabled"}
     await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
-    await db["access_states"].update_one({"user_id": user_id}, {"$set": {"vpn_access": []}})
+    await db["access_states"].update_one({"user_id": user_id}, {"$set": {
+        "vpn_access": [],
+        "connected": False,
+        "connected_vpn": None,
+        "connected_ip": None,
+        "connected_at": None,
+        "last_disconnected_at": datetime.utcnow()
+    }})
     await db["audit_logs"].insert_one({
         "user_id": admin.user_id,
         "action": "leaver",
@@ -107,15 +121,33 @@ async def approve_access_request(request_id: str, db=Depends(get_database), admi
     resource_type = access_req.get("resource_type")
     if user_id and resource_type:
         state = await db["access_states"].find_one({"user_id": user_id})
+        field = "vpn_access" if "vpn" in (resource_type or "") else "resources"
         if state:
-            field = "vpn_access" if "vpn" in (resource_type or "") else "resources"
             existing = state.get(field, [])
             if resource_type not in existing:
                 existing.append(resource_type)
-                await db["access_states"].update_one({"user_id": user_id}, {"$set": {field: existing}})
+                await db["access_states"].update_one(
+                    {"user_id": user_id},
+                    {"$set": {
+                        field: existing,
+                        "connected": False,
+                        "connected_vpn": None,
+                        "connected_ip": None,
+                        "connected_at": None,
+                        "last_disconnected_at": None
+                    }}
+                )
         else:
-            field = "vpn_access" if "vpn" in (resource_type or "") else "resources"
-            await db["access_states"].insert_one({"user_id": user_id, "vpn_access": [], "resources": [], field: [resource_type]})
+            await db["access_states"].insert_one({
+                "user_id": user_id,
+                "vpn_access": [resource_type] if field == "vpn_access" else [],
+                "resources": [resource_type] if field == "resources" else [],
+                "connected": False,
+                "connected_vpn": None,
+                "connected_ip": None,
+                "connected_at": None,
+                "last_disconnected_at": None
+            })
         
         await db["audit_logs"].update_one(
             {"user_id": user_id, "target_resource": resource_type, "action": "ESCALATE"},

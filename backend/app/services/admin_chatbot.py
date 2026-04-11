@@ -322,7 +322,15 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             "hashed_password": get_password_hash("TempPass@123")
         }
         await db["users"].insert_one(new_user)
-        await db["access_states"].insert_one({"user_id": user_id, "vpn_access": []})
+        await db["access_states"].insert_one({
+            "user_id": user_id,
+            "vpn_access": [],
+            "connected": False,
+            "connected_vpn": None,
+            "connected_ip": None,
+            "connected_at": None,
+            "last_disconnected_at": None
+        })
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "joiner",
@@ -360,7 +368,14 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         )
         await db["access_states"].update_one(
             {"user_id": user_id},
-            {"$set": {"vpn_access": []}}
+            {"$set": {
+                "vpn_access": [],
+                "connected": False,
+                "connected_vpn": None,
+                "connected_ip": None,
+                "connected_at": None,
+                "last_disconnected_at": datetime.utcnow()
+            }}
         )
         old_dept = user.get('department', 'unknown')
         old_role = user.get('role', 'unknown')
@@ -396,7 +411,14 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             return f"⚠️ **{user_id}** is already disabled/offboarded."
 
         await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
-        await db["access_states"].update_one({"user_id": user_id}, {"$set": {"vpn_access": []}})
+        await db["access_states"].update_one({"user_id": user_id}, {"$set": {
+            "vpn_access": [],
+            "connected": False,
+            "connected_vpn": None,
+            "connected_ip": None,
+            "connected_at": None,
+            "last_disconnected_at": datetime.utcnow()
+        }})
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "leaver",
@@ -425,7 +447,14 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             return f"⚠️ **{user_id}** is already disabled."
 
         await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "inactive", "disabled": True}})
-        await db["access_states"].update_one({"user_id": user_id}, {"$set": {"vpn_access": []}})
+        await db["access_states"].update_one({"user_id": user_id}, {"$set": {
+            "vpn_access": [],
+            "connected": False,
+            "connected_vpn": None,
+            "connected_ip": None,
+            "connected_at": None,
+            "last_disconnected_at": datetime.utcnow()
+        }})
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "disable_user",
@@ -493,7 +522,15 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 "hashed_password": get_password_hash("TempPass@123")
             }
             await db["users"].insert_one(new_user)
-            await db["access_states"].insert_one({"user_id": user_id, "vpn_access": []})
+            await db["access_states"].insert_one({
+                "user_id": user_id,
+                "vpn_access": [],
+                "connected": False,
+                "connected_vpn": None,
+                "connected_ip": None,
+                "connected_at": None,
+                "last_disconnected_at": None
+            })
             await db["audit_logs"].insert_one({
                 "user_id": "admin",
                 "action": "joiner",
@@ -520,7 +557,14 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 results.append(f"⚠️ {uid} — not found")
                 continue
             await db["users"].update_one({"user_id": uid}, {"$set": {"status": "inactive", "disabled": True}})
-            await db["access_states"].update_one({"user_id": uid}, {"$set": {"vpn_access": []}})
+            await db["access_states"].update_one({"user_id": uid}, {"$set": {
+                "vpn_access": [],
+                "connected": False,
+                "connected_vpn": None,
+                "connected_ip": None,
+                "connected_at": None,
+                "last_disconnected_at": datetime.utcnow()
+            }})
             await db["audit_logs"].insert_one({
                 "user_id": "admin",
                 "action": "leaver",

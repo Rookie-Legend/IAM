@@ -24,8 +24,7 @@ IAM_Automation/
 │   │   └── App.jsx      # Main app component
 │   ├── .env             # Frontend environment variables
 ├── vpn/                 # OpenVPN server setup
-│   ├── vpn-server/      # Production VPN server
-│   └── dev-server/      # Development VPN endpoint
+│   └── vpn-server/      # Production VPN server
 ├── mongodb/             # Database seeding scripts
 └── docker-compose.yml   # Container orchestration
 ```
