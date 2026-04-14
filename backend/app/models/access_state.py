@@ -7,6 +7,8 @@ class AccessStateBase(BaseModel):
 
 class AccessStateInDB(AccessStateBase):
     user_id: str = Field(alias="user_id")
+    has_provisioned: bool = False
+    provisioned_vpn: Optional[str] = None
     connected: bool = False
     connected_vpn: Optional[str] = None
     connected_ip: Optional[str] = None

@@ -14,6 +14,20 @@ import { apiUrl } from '../stores/configStore';
 
 const TYPE_COLORS = { jml: '#22c55e', access: '#3b82f6', mfa: '#f59e0b' };
 const STATUS_COLORS = { active: '#22c55e', inactive: '#ef4444', disabled: '#f59e0b' };
+const POLICY_STATE_STYLES = {
+  active: {
+    badgeBg: 'var(--color-success-bg)',
+    badgeColor: 'var(--color-success)',
+    toggleBg: 'var(--color-warning-bg)',
+    toggleColor: 'var(--color-warning)'
+  },
+  inactive: {
+    badgeBg: 'var(--color-error-bg)',
+    badgeColor: 'var(--color-error)',
+    toggleBg: 'var(--color-success-bg)',
+    toggleColor: 'var(--color-success)'
+  }
+};
 
 const AdminDashboard = ({ token }) => {
   const [policies, setPolicies] = useState([]);
@@ -38,13 +52,7 @@ const AdminDashboard = ({ token }) => {
     'Authorization': `Bearer ${token}`
   };
 
-  useEffect(() => {
-    fetchPolicies();
-    fetchStats();
-    fetchUsers();
-  }, []);
-
-  const fetchPolicies = async () => {
+  async function fetchPolicies() {
     try {
       const res = await fetch(apiUrl('/api/policies/'), { headers: { 'Authorization': `Bearer ${token}` } });
       const data = await res.json();
@@ -52,24 +60,34 @@ const AdminDashboard = ({ token }) => {
     } catch (e) {
       console.error('Fetch policies error:', e);
     }
-  };
+  }
 
-  const fetchStats = async () => {
+  async function fetchStats() {
     try {
       const res = await fetch(apiUrl('/api/admin/dashboard'), { headers: { 'Authorization': `Bearer ${token}` } });
       if (res.ok) setStats(await res.json());
-    } catch (e) { }
-  };
+    } catch (e) {
+      console.error('Fetch stats error:', e);
+    }
+  }
 
-  const fetchUsers = async () => {
+  async function fetchUsers() {
     try {
       const res = await fetch(apiUrl('/api/admin/users'), { headers: authHeaders });
       if (res.ok) {
         const data = await res.json();
         setUsers(Array.isArray(data) ? data : []);
       }
-    } catch (e) { }
-  };
+    } catch (e) {
+      console.error('Fetch users error:', e);
+    }
+  }
+
+  useEffect(() => {
+    fetchPolicies();
+    fetchStats();
+    fetchUsers();
+  }, []);
 
   const handleSave = async () => {
     if (!newPolicy.name || !newPolicy.description) {
@@ -107,7 +125,7 @@ const AdminDashboard = ({ token }) => {
     fetchPolicies();
   };
 
-  const handleToggle = async (id, currentStatus) => {
+  const handleToggle = async (id) => {
     await fetch(apiUrl(`/api/policies/${id}/toggle`), { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}` } });
     fetchPolicies();
   };
@@ -192,7 +210,7 @@ const AdminDashboard = ({ token }) => {
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
               activeTab === tab.id
                 ? 'bg-accent-blue text-white'
-                : 'text-text-muted hover:bg-white/10 hover:text-text'
+                : 'text-text-muted hover:bg-hover hover:text-text'
             }`}
           >
             <FontAwesomeIcon icon={tab.icon} />
@@ -230,7 +248,7 @@ const AdminDashboard = ({ token }) => {
               </thead>
               <tbody>
                 {filteredUsers.map(u => (
-                  <tr key={u.user_id} className="border-b border-border-subtle hover:bg-white/5 transition-all">
+                  <tr key={u.user_id} className="border-b border-border-subtle hover:bg-hover transition-all">
                     <td className="px-4 py-3 font-mono text-xs">{u.user_id}</td>
                     <td className="px-4 py-3">
                       <div className="font-medium">{u.full_name || 'N/A'}</div>
@@ -355,7 +373,7 @@ const AdminDashboard = ({ token }) => {
                   {saved ? '✓ Saved!' : (editingId ? 'Update Policy' : 'Save Policy')}
                 </button>
                   {editingId && (
-                    <button className="py-2.5 px-4 bg-white/10 text-text rounded-lg text-sm hover:bg-white/20 transition-all"
+                    <button className="py-2.5 px-4 bg-elevated text-text rounded-lg text-sm hover:bg-hover transition-all"
                       onClick={() => { setEditingId(null); setNewPolicy({ name: '', type: 'access', description: '', department: '', vpn: '', is_active: true, json: '' }); }}>
                       Cancel
                     </button>
@@ -369,29 +387,36 @@ const AdminDashboard = ({ token }) => {
             <h3 className="text-base font-semibold mb-4">All Policies ({policies.length})</h3>
             <div className="overflow-y-auto pr-1" style={{ maxHeight: 500 }}>
               {policies.map(p => (
-                <div key={p.pol_id} className={`mb-3 p-4 border border-border-subtle rounded-lg transition-all ${p.is_active ? 'bg-white/5 hover:bg-white/10' : 'bg-gray-500/10 opacity-60'}`}
+                (() => {
+                  const policyStateStyle = p.is_active ? POLICY_STATE_STYLES.active : POLICY_STATE_STYLES.inactive;
+                  return (
+                <div key={p.pol_id} className={`mb-3 p-4 border border-border-subtle rounded-lg transition-all ${p.is_active ? 'bg-elevated hover:bg-hover' : 'bg-elevated opacity-60'}`}
                   style={{ borderLeftWidth: 4, borderLeftColor: p.is_active ? (TYPE_COLORS[p.type] || '#888') : '#ef4444' }}>
                   <div className="flex justify-between items-center mb-2">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold">{p.name}</span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${p.is_active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                      <span
+                        className="px-2 py-0.5 rounded text-[10px] font-semibold"
+                        style={{ backgroundColor: policyStateStyle.badgeBg, color: policyStateStyle.badgeColor }}
+                      >
                         {p.is_active ? 'ACTIVE' : 'INACTIVE'}
                       </span>
                     </div>
                     <div className="flex gap-2 items-center">
                       <button 
-                        className={`p-1.5 rounded transition-all ${p.is_active ? 'hover:bg-yellow-500/20 text-yellow-400' : 'hover:bg-green-500/20 text-green-400'}`} 
+                        className="p-1.5 rounded transition-all"
+                        style={{ color: policyStateStyle.toggleColor, backgroundColor: policyStateStyle.toggleBg }}
                         onClick={() => handleToggle(p.pol_id, p.is_active)}
                         title={p.is_active ? 'Deactivate' : 'Activate'}
                       >
                         <FontAwesomeIcon icon={p.is_active ? faShieldHalved : faShieldHalved} />
                       </button>
-                      <button className="p-1.5 rounded hover:bg-white/10 transition-all" onClick={() => handleEdit(p)}><FontAwesomeIcon icon={faPencil} /></button>
+                      <button className="p-1.5 rounded hover:bg-hover transition-all" onClick={() => handleEdit(p)}><FontAwesomeIcon icon={faPencil} /></button>
                       <button className="p-1.5 rounded hover:bg-error/10 transition-all text-error" onClick={() => handleDelete(p.pol_id)}><FontAwesomeIcon icon={faTrashCan} /></button>
                     </div>
                   </div>
                   <p className="text-[12px] text-text-muted mb-3">{p.description}</p>
-                  <pre className="text-[11px] text-text-muted bg-black/20 p-3 rounded overflow-auto" style={{ fontFamily: 'monospace' }}>
+                  <pre className="text-[11px] text-text-muted p-3 rounded overflow-auto" style={{ fontFamily: 'monospace', backgroundColor: 'var(--color-code-bg)' }}>
                     {JSON.stringify({
                       id: p.pol_id,
                       type: p.type,
@@ -401,6 +426,8 @@ const AdminDashboard = ({ token }) => {
                     }, null, 2)}
                   </pre>
                 </div>
+                  );
+                })()
               ))}
             </div>
           </div>
@@ -409,8 +436,8 @@ const AdminDashboard = ({ token }) => {
 
       {/* Custom Confirmation Modal */}
       {confirmModal.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-surface border border-border rounded-xl shadow-2xl p-6 max-w-sm w-full outline outline-1 outline-white/10">
+        <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm" style={{ backgroundColor: 'var(--color-overlay)' }}>
+          <div className="bg-surface border border-border rounded-xl p-6 max-w-sm w-full" style={{ boxShadow: 'var(--color-shadow-strong)' }}>
             <h3 className="text-lg font-bold text-text mb-2">
               {confirmModal.action === 'offboard' && 'Confirm Offboarding'}
               {confirmModal.action === 'disable' && 'Confirm Disable Action'}
@@ -444,7 +471,7 @@ const AdminDashboard = ({ token }) => {
             <div className="flex justify-end gap-3">
               <button 
                 onClick={cancelConfirm}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-text-muted hover:text-text hover:bg-white/5 transition-all"
+                className="px-4 py-2 rounded-lg text-sm font-medium text-text-muted hover:text-text hover:bg-hover transition-all"
               >
                 Cancel
               </button>
@@ -456,7 +483,7 @@ const AdminDashboard = ({ token }) => {
                     ? confirmModal.action === 'offboard' ? 'bg-red-600 text-white hover:bg-red-500' 
                       : confirmModal.action === 'disable' ? 'bg-yellow-600 text-white hover:bg-yellow-500'
                       : 'bg-green-600 text-white hover:bg-green-500'
-                    : 'bg-white/10 text-white/40 cursor-not-allowed'
+                    : 'bg-elevated text-text-muted opacity-50 cursor-not-allowed'
                 }`}
               >
                 {confirmModal.action === 'offboard' ? 'Confirm Offboarding' :

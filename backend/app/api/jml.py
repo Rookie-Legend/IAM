@@ -76,7 +76,7 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
             "full_name": request.full_name or request.user_id,
             "department": request.department or "engineering",
             "role": request.role or "software_engineer",
-            "status": "active",
+            "status": "inactive",
             "disabled": False,
             "hashed_password": get_password_hash("TempPass@123")
         }
@@ -160,7 +160,7 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
 
     elif request.event_type == "reinstate":
         user = await db["users"].find_one({"user_id": request.user_id})
-        await db["users"].update_one({"user_id": request.user_id}, {"$set": {"status": "active", "disabled": False}})
+        await db["users"].update_one({"user_id": request.user_id}, {"$set": {"status": "inactive", "disabled": False}})
         await db["audit_logs"].insert_one({
             "user_id": admin.user_id,
             "action": "reinstate",

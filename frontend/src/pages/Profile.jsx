@@ -87,7 +87,7 @@ const Profile = ({ user, token, accessState }) => {
                 return (
                   <div
                     key={vpn.id}
-                    className={`p-3 rounded-lg border transition-all ${active ? 'bg-accent-blue/8 border-accent-blue/30 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-white/1 border-white/3 opacity-40'}`}
+                    className={`p-3 rounded-lg border transition-all ${active ? 'bg-accent-blue/8 border-accent-blue/30 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-elevated border-border-subtle opacity-60'}`}
                   >
                     <div className={`text-sm font-semibold ${active ? 'text-text' : 'text-text-muted'}`}>{vpn.name}</div>
                     <div className="text-[11px] opacity-50">{vpn.description}</div>

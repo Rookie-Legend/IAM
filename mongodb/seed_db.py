@@ -36,6 +36,7 @@ async def seed_db():
     await db.access_states.drop()
     await db.audit_logs.drop()
     await db.vpn_ip_pools.drop()
+    await db.vpn_events.drop()
     await db.vpn_sessions.drop()
     await db.vpn_audit_logs.drop()
 
@@ -50,7 +51,7 @@ async def seed_db():
             "full_name": "Admin",
             "department": "Security",
             "role": "Security Admin",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -61,7 +62,7 @@ async def seed_db():
             "full_name": "HR Manager",
             "department": "HR",
             "role": "HR Manager",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -72,7 +73,7 @@ async def seed_db():
             "full_name": "Cloud Infra Engineer",
             "department": "Engineering",
             "role": "devops_engineer",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -83,7 +84,7 @@ async def seed_db():
             "full_name": "Frontend Engineer",
             "department": "Engineering",
             "role": "software_engineer",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -94,7 +95,7 @@ async def seed_db():
             "full_name": "Backend Engineer",
             "department": "Engineering",
             "role": "software_engineer",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -105,7 +106,7 @@ async def seed_db():
             "full_name": "Payroll Auditor",
             "department": "Finance",
             "role": "financial_analyst",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -116,7 +117,7 @@ async def seed_db():
             "full_name": "Compliance Auditor",
             "department": "Finance",
             "role": "financial_analyst",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -127,7 +128,7 @@ async def seed_db():
             "full_name": "Haresh",
             "department": "Security",
             "role": "Security Admin",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         }
     ]
@@ -179,6 +180,8 @@ async def seed_db():
         {
             "user_id": "S1001",
             "vpn_access": ["vpn_sec", "vpn_hr", "vpn_eng", "vpn_fin"],
+            "has_provisioned": False,
+            "provisioned_vpn": None,
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
@@ -188,6 +191,8 @@ async def seed_db():
         {
             "user_id": "H1001",
             "vpn_access": ["vpn_hr"],
+            "has_provisioned": False,
+            "provisioned_vpn": None,
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
@@ -197,6 +202,8 @@ async def seed_db():
         {
             "user_id": "U1001",
             "vpn_access": ["vpn_eng"],
+            "has_provisioned": False,
+            "provisioned_vpn": None,
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
@@ -206,6 +213,8 @@ async def seed_db():
         {
             "user_id": "U1002",
             "vpn_access": [],
+            "has_provisioned": False,
+            "provisioned_vpn": None,
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
@@ -215,6 +224,8 @@ async def seed_db():
         {
             "user_id": "U1003",
             "vpn_access": [],
+            "has_provisioned": False,
+            "provisioned_vpn": None,
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
@@ -224,6 +235,8 @@ async def seed_db():
         {
             "user_id": "F1001",
             "vpn_access": [],
+            "has_provisioned": False,
+            "provisioned_vpn": None,
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
@@ -233,6 +246,8 @@ async def seed_db():
         {
             "user_id": "F1002",
             "vpn_access": ["vpn_fin"],
+            "has_provisioned": False,
+            "provisioned_vpn": None,
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
@@ -242,6 +257,8 @@ async def seed_db():
         {
             "user_id": "S1002",
             "vpn_access": ["vpn_sec"],
+            "has_provisioned": False,
+            "provisioned_vpn": None,
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
@@ -257,44 +274,40 @@ async def seed_db():
         "pool_id": "vpn_eng",
         "name": "Engineering VPN",
         "department": "Engineering",
-        "subnet": "10.10.0.0/20",
-        "start_ip": "10.10.0.5",
-        "end_ip": "10.10.15.254",
-        "gateway": "10.10.0.1",
-        "next_ip": "10.10.0.5",
+        "subnet": "100.64.0.0/20",
+        "start_ip": "100.64.0.5",
+        "end_ip": "100.64.15.254",
+        "next_ip": "100.64.0.5",
         "is_active": True
     },
     {
         "pool_id": "vpn_fin",
         "name": "Finance VPN",
         "department": "Finance",
-        "subnet": "10.10.16.0/20",
-        "start_ip": "10.10.16.5",
-        "end_ip": "10.10.31.254",
-        "gateway": "10.10.16.1",
-        "next_ip": "10.10.16.5",
+        "subnet": "100.64.16.0/20",
+        "start_ip": "100.64.16.5",
+        "end_ip": "100.64.31.254",
+        "next_ip": "100.64.16.5",
         "is_active": True
     },
     {
         "pool_id": "vpn_hr",
         "name": "HR VPN",
         "department": "HR",
-        "subnet": "10.10.32.0/20",
-        "start_ip": "10.10.32.5",
-        "end_ip": "10.10.47.254",
-        "gateway": "10.10.32.1",
-        "next_ip": "10.10.32.5",
+        "subnet": "100.64.32.0/20",
+        "start_ip": "100.64.32.5",
+        "end_ip": "100.64.47.254",
+        "next_ip": "100.64.32.5",
         "is_active": True
     },
     {
         "pool_id": "vpn_sec",
         "name": "Security VPN",
         "department": "Security",
-        "subnet": "10.10.48.0/20",
-        "start_ip": "10.10.48.5",
-        "end_ip": "10.10.63.254",
-        "gateway": "10.10.48.1",
-        "next_ip": "10.10.48.5",
+        "subnet": "100.64.48.0/20",
+        "start_ip": "100.64.48.5",
+        "end_ip": "100.64.63.254",
+        "next_ip": "100.64.48.5",
         "is_active": True
     }
     ]
@@ -303,9 +316,9 @@ async def seed_db():
 
     await db.vpn_sessions.create_index("user_id")
     await db.vpn_sessions.create_index("is_active")
-    await db.vpn_audit_logs.create_index("timestamp")
-    await db.vpn_audit_logs.create_index("user_id")
-    await db.vpn_audit_logs.create_index("event_type")
+    await db.vpn_events.create_index("timestamp")
+    await db.vpn_events.create_index("user_id")
+    await db.vpn_events.create_index("event_type")
     print("Created VPN sessions and audit logs indexes")
 
     print("Database seeding completed.")

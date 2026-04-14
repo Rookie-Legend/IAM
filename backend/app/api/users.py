@@ -3,6 +3,7 @@ from app.core.database import get_database
 from app.core.security import get_password_hash
 from app.api.dependencies import get_current_user, get_current_admin
 from app.models.user import UserInDB, UserCreate
+from app.services.user_status import apply_user_status
 
 router = APIRouter(prefix="/api/users", tags=["Users"])
 
@@ -19,16 +20,16 @@ async def get_user(user_id: str, db=Depends(get_database), current_user: UserInD
         raise HTTPException(status_code=404, detail="User not found")
     user.pop("hashed_password", None)
     user.pop("_id", None)
-    return user
+    return await apply_user_status(db, user)
 
 @router.get("/")
 async def list_users(db=Depends(get_database), admin=Depends(get_current_admin)):
     cursor = db["users"].find({}, {"hashed_password": 0, "_id": 0})
     users = await cursor.to_list(length=100)
-    return users
+    return [await apply_user_status(db, u) for u in users]
 
 @router.get("/department/members")
 async def get_department_members(db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
     cursor = db["users"].find({"department": current_user.department}, {"hashed_password": 0, "_id": 0})
     users = await cursor.to_list(length=100)
-    return users
+    return [await apply_user_status(db, u) for u in users]

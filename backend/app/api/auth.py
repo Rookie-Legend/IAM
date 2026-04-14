@@ -148,7 +148,7 @@ async def complete_registration(request: CompleteRegistrationRequest, db=Depends
         "full_name": request.full_name,
         "department": invite["department"],
         "role": invite["role"],
-        "status": "active",
+        "status": "inactive",
         "disabled": False,
         "hashed_password": hashed
     }

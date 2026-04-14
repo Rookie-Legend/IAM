@@ -316,7 +316,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             "full_name": name,
             "department": dept,
             "role": role,
-            "status": "active",
+            "status": "inactive",
             "disabled": False,
 
             "hashed_password": get_password_hash("TempPass@123")
@@ -482,7 +482,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         if user.get("status") == "active" and not user.get("disabled"):
             return f"⚠️ **{user_id}** is already active."
 
-        await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "active", "disabled": False}})
+        await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "inactive", "disabled": False}})
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "reinstate",
@@ -516,7 +516,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 "full_name": name,
                 "department": dept,
                 "role": role,
-                "status": "active",
+                "status": "inactive",
                 "disabled": False,
     
                 "hashed_password": get_password_hash("TempPass@123")

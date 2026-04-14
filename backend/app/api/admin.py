@@ -2,14 +2,18 @@ from fastapi import APIRouter, Depends
 from datetime import datetime
 from app.core.database import get_database
 from app.api.dependencies import get_current_admin
+from app.services.user_status import apply_user_status
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 @router.get("/dashboard")
 async def admin_dashboard(db=Depends(get_database), admin=Depends(get_current_admin)):
     total_users = await db["users"].count_documents({})
-    active_users = await db["users"].count_documents({"status": "active", "disabled": False})
     disabled_users = await db["users"].count_documents({"disabled": True})
+    active_users = await db["vpn_sessions"].count_documents({
+        "is_active": True,
+        "connected_at": {"$ne": None}
+    })
     total_policies = await db["policies"].count_documents({})
     pending_requests = await db["access_requests"].count_documents({"status": "pending"})
     return {
@@ -28,7 +32,7 @@ async def list_all_users(db=Depends(get_database), admin=Depends(get_current_adm
         u["_id"] = str(u["_id"])
         u["user_id"] = str(u.get("user_id", u["_id"]))
         u["id"] = str(u.get("user_id", u["_id"]))
-    return users
+    return [await apply_user_status(db, u) for u in users]
 
 @router.post("/users/{user_id}/disable")
 async def disable_user(user_id: str, db=Depends(get_database), admin=Depends(get_current_admin)):
@@ -63,7 +67,7 @@ async def reinstate_user(user_id: str, db=Depends(get_database), admin=Depends(g
         return {"status": "error", "message": f"User {user_id} not found"}
     if not user.get("disabled"):
         return {"status": "error", "message": f"User {user_id} is already active"}
-    await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "active", "disabled": False}})
+    await db["users"].update_one({"user_id": user_id}, {"$set": {"status": "inactive", "disabled": False}})
     await db["audit_logs"].insert_one({
         "user_id": admin.user_id,
         "action": "reinstate_user",

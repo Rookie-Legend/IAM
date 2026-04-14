@@ -12,6 +12,7 @@ CONFIG_OUT_DIR = "/etc/openvpn/client-configs"
 CCD_DIR = "/etc/openvpn/ccd"
 TEMPLATE_FILE = "/etc/openvpn/client.ovpn"
 MGMT_PORT = 7505
+STATUS_LOG_PATH = "/var/log/openvpn/status.log"
 
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://mongodb:27017")
 DB_NAME = os.environ.get("DATABASE_NAME", "iam_db")
@@ -27,12 +28,45 @@ def get_db():
 def run_cmd(cmd):
     subprocess.run(cmd, cwd=EASYRSA_DIR, shell=True, check=True, env={**os.environ, "EASYRSA_BATCH": "1"})
 
+def is_temp_openvpn_username(value):
+    return bool(value) and value.startswith("/tmp/openvpn_cc_")
+
 def ip_to_int(ip):
     parts = ip.split('.')
     return (int(parts[0]) << 24) + (int(parts[1]) << 16) + (int(parts[2]) << 8) + int(parts[3])
 
 def int_to_ip(n):
     return f"{(n >> 24) & 0xFF}.{(n >> 16) & 0xFF}.{(n >> 8) & 0xFF}.{n & 0xFF}"
+
+async def insert_vpn_event(db, event_type, user_id, vpn_ip="", source_ip="", vpn_id="", details="", timestamp=None):
+    event_time = timestamp or datetime.utcnow()
+    normalized_event_type = (event_type or "").lower()
+    normalized_details = details or vpn_id or ""
+
+    recent = await db.vpn_events.find_one(
+        {
+            "event_type": normalized_event_type,
+            "user_id": user_id,
+            "vpn_ip": vpn_ip,
+            "vpn_id": vpn_id,
+            "timestamp": {"$gte": event_time.replace(microsecond=0)}
+        }
+    )
+    if recent:
+        return
+
+    await db.vpn_events.insert_one({
+        "event_type": normalized_event_type,
+        "user_id": user_id,
+        "vpn_ip": vpn_ip,
+        "source_ip": source_ip,
+        "vpn_id": vpn_id,
+        "details": normalized_details,
+        "timestamp": event_time,
+        "event": normalized_event_type.upper(),
+        "username": user_id,
+        "ip": vpn_ip
+    })
 
 async def get_pool_from_db(db, vpn_id):
     pool = await db.vpn_ip_pools.find_one({"pool_id": vpn_id, "is_active": True})
@@ -45,10 +79,12 @@ async def allocate_ip(db, user_id, vpn_id):
     
     start_int = ip_to_int(pool["start_ip"])
     end_int = ip_to_int(pool["end_ip"])
+    range_size = end_int - start_int + 1
     
     taken = set(pool.get("assigned_ips", []))
     
-    for ip_int in range(start_int, end_int + 1):
+    for offset in range(range_size):
+        ip_int = start_int + offset
         ip = int_to_ip(ip_int)
         if ip not in taken:
             await db.vpn_ip_pools.update_one(
@@ -64,6 +100,8 @@ async def allocate_ip(db, user_id, vpn_id):
 
 async def release_ip_by_username(db, username):
     session = await db.vpn_sessions.find_one({"user_id": username, "is_active": True})
+    if not session:
+        session = await db.vpn_sessions.find_one({"user_id": username})
     if not session:
         return None
     
@@ -81,46 +119,86 @@ async def release_ip_by_username(db, username):
     
     return {"ip": ip, "vpn_id": vpn_id}
 
-async def log_audit(db, event_type, user_id, vpn_id, vpn_ip, source_ip="", details=""):
-    await db.vpn_audit_logs.insert_one({
-        "event_type": event_type,
-        "user_id": user_id,
-        "vpn_id": vpn_id,
-        "vpn_ip": vpn_ip,
-        "source_ip": source_ip,
-        "timestamp": datetime.utcnow(),
-        "details": details
-    })
+async def resolve_session_identity(db, username="", vpn_ip=""):
+    normalized_username = (username or "").strip()
+    if normalized_username and not is_temp_openvpn_username(normalized_username):
+        session = await db.vpn_sessions.find_one({"user_id": normalized_username, "is_active": True})
+        if not session:
+            session = await db.vpn_sessions.find_one({"user_id": normalized_username})
+        return normalized_username, session
+
+    if vpn_ip:
+        session = await db.vpn_sessions.find_one({"assigned_ip": vpn_ip, "is_active": True})
+        if session:
+            return session["user_id"], session
+
+        session = await db.vpn_sessions.find_one({"assigned_ip": vpn_ip})
+        if session:
+            return session["user_id"], session
+
+        session = await db.vpn_sessions.find_one({"vpn_ip": vpn_ip, "is_active": True})
+        if session:
+            return session["user_id"], session
+
+        session = await db.vpn_sessions.find_one({"vpn_ip": vpn_ip})
+        if session:
+            return session["user_id"], session
+
+    return normalized_username, None
+
+def _parse_datetime_to_epoch(value):
+    try:
+        return int(datetime.strptime(value, "%Y-%m-%d %H:%M:%S").timestamp())
+    except Exception:
+        return 0
 
 def query_openvpn_status():
-    clients = []
+    clients = {}
+
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        sock.connect(('127.0.0.1', MGMT_PORT))
-        sock.sendall(b"status 2\n")
-        data = b""
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk or b"END" in data:
-                break
-            data += chunk
-        sock.sendall(b"quit\n")
-        sock.close()
-        
-        for line in data.decode('utf-8', errors='ignore').split('\n'):
-            if line.startswith('CLIENT_LIST'):
-                parts = line.split(',')
-                if len(parts) >= 6:
-                    clients.append({
-                        'username': parts[1],
-                        'source_ip': parts[2],
-                        'vpn_ip': parts[3],
-                        'connected_since': int(parts[5])
-                    })
+        with open(STATUS_LOG_PATH, "r") as status_file:
+            for raw_line in status_file:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t")
+                record_type = parts[0]
+
+                if record_type == "CLIENT_LIST" and len(parts) >= 9:
+                    common_name = parts[1].strip()
+                    if not common_name:
+                        continue
+                    clients.setdefault(common_name, {})
+                    clients[common_name]["username"] = common_name
+                    clients[common_name]["source_ip"] = parts[2].strip()
+                    clients[common_name]["vpn_ip"] = parts[3].strip()
+                    clients[common_name]["connected_since"] = (
+                        int(parts[8].strip()) if parts[8].strip().isdigit() else _parse_datetime_to_epoch(parts[7].strip())
+                    )
+                elif record_type == "ROUTING_TABLE" and len(parts) >= 4:
+                    vpn_ip = parts[1].strip()
+                    common_name = parts[2].strip()
+                    source_ip = parts[3].strip()
+                    if not common_name:
+                        continue
+                    clients.setdefault(common_name, {})
+                    clients[common_name]["username"] = common_name
+                    clients[common_name]["vpn_ip"] = vpn_ip
+                    if source_ip:
+                        clients[common_name]["source_ip"] = source_ip
     except Exception as e:
-        print(f"Error querying OpenVPN: {e}")
-    return clients
+        print(f"Error querying OpenVPN status log: {e}")
+
+    return [
+        {
+            "username": username,
+            "source_ip": data.get("source_ip", ""),
+            "vpn_ip": data.get("vpn_ip", ""),
+            "connected_since": data.get("connected_since", 0),
+        }
+        for username, data in clients.items()
+        if data.get("username")
+    ]
 
 class ReleaseIPRequest(BaseModel):
     username: str
@@ -142,7 +220,11 @@ async def create_user(username: str, request: AllocateRequest = None):
     vpn_id = request.vpn_id if request else "vpn_eng"
     
     try:
-        run_cmd(f"./easyrsa build-client-full {username} nopass")
+        cert_path = f"{EASYRSA_DIR}/pki/issued/{username}.crt"
+        if os.path.exists(cert_path):
+            pass
+        else:
+            run_cmd(f"./easyrsa build-client-full {username} nopass")
         
         ip, pool_name = await allocate_ip(db, username, vpn_id)
         
@@ -163,26 +245,39 @@ async def create_user(username: str, request: AllocateRequest = None):
         with open(config_path, "w") as f:
             f.write(ovpn_content)
         
-        await db.vpn_sessions.insert_one({
-            "session_id": str(uuid.uuid4()),
-            "user_id": username,
-            "vpn_id": vpn_id,
-            "assigned_ip": ip,
-            "source_ip": "",
-            "connected_at": None,
-            "last_activity": datetime.utcnow(),
-            "is_active": True
-        })
+        await db.vpn_sessions.update_one(
+            {"user_id": username},
+            {"$set": {
+                "session_id": str(uuid.uuid4()),
+                "user_id": username,
+                "vpn_id": vpn_id,
+                "assigned_ip": ip,
+                "vpn_ip": None,
+                "source_ip": "",
+                "connected_at": None,
+                "last_activity": datetime.utcnow(),
+                "is_active": False
+            }},
+            upsert=True
+        )
         
         await db.access_states.update_one(
             {"user_id": username},
             {"$set": {
+                "has_provisioned": True,
+                "provisioned_vpn": vpn_id,
                 "connected": False,
-                "connected_vpn": vpn_id,
-                "connected_ip": ip,
-                "connected_at": None
+                "connected_vpn": None,
+                "connected_ip": None,
+                "connected_at": None,
+                "last_disconnected_at": None
             }},
             upsert=True
+        )
+
+        await db.users.update_one(
+            {"user_id": username, "disabled": {"$ne": True}},
+            {"$set": {"status": "inactive"}}
         )
         
         return {"status": "success", "message": f"User {username} provisioned with IP {ip}", "ip": ip, "pool": pool_name}
@@ -195,7 +290,7 @@ async def create_user(username: str, request: AllocateRequest = None):
 def download_config(username: str):
     file_path = f"{CONFIG_OUT_DIR}/{username}.ovpn"
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Config not found. Did you create the user?")
+        raise HTTPException(status_code=404, detail="Config not found. Please provision a VPN first.")
     return FileResponse(file_path, filename=f"{username}.ovpn", media_type="application/x-openvpn-profile")
 
 @app.post("/users/{username}/revoke")
@@ -216,12 +311,19 @@ async def revoke_user(username: str):
         if os.path.exists(ccd_path):
             os.remove(ccd_path)
         
-        if released:
-            await db.vpn_sessions.update_one(
-                {"user_id": username},
-                {"$set": {"is_active": False, "connected_at": None}}
-            )
-            await log_audit(db, "revoke", username, released["vpn_id"], released["ip"])
+        await db.vpn_sessions.delete_one({"user_id": username})
+        
+        await db.access_states.update_one(
+            {"user_id": username},
+            {"$set": {
+                "has_provisioned": False,
+                "provisioned_vpn": None,
+                "connected": False,
+                "connected_vpn": None,
+                "connected_ip": None,
+                "last_disconnected_at": datetime.utcnow()
+            }}
+        )
         
         return {"status": "success", "message": f"User {username} revoked. Their VPN access has been terminated."}
     except Exception as e:
@@ -231,25 +333,41 @@ async def revoke_user(username: str):
 async def release_ip_endpoint(request: ReleaseIPRequest):
     db = get_db()
     try:
-        released = await release_ip_by_username(db, request.username)
+        resolved_username, _ = await resolve_session_identity(db, request.username, request.vpn_ip)
+        released = await release_ip_by_username(db, resolved_username)
         
         if released:
             await db.vpn_sessions.update_one(
-                {"user_id": request.username, "is_active": True},
-                {"$set": {"is_active": False, "last_activity": datetime.utcnow()}}
+                {"user_id": resolved_username, "is_active": True},
+                {"$set": {"is_active": False, "assigned_ip": None, "last_activity": datetime.utcnow()}}
             )
             
             await db.access_states.update_one(
-                {"user_id": request.username},
+                {"user_id": resolved_username},
                 {"$set": {
                     "connected": False,
+                    "connected_vpn": None,
+                    "connected_ip": None,
                     "last_disconnected_at": datetime.utcnow()
                 }}
             )
+
+            await db.users.update_one(
+                {"user_id": resolved_username, "disabled": {"$ne": True}},
+                {"$set": {"status": "inactive"}}
+            )
             
-            await log_audit(db, "disconnect", request.username, released["vpn_id"], released["ip"], request.source_ip)
+            await insert_vpn_event(
+                db,
+                "disconnect",
+                resolved_username,
+                vpn_ip=released["ip"],
+                source_ip=request.source_ip,
+                vpn_id=released["vpn_id"],
+                details=f"Disconnected from {released['vpn_id']}"
+            )
             
-            return {"status": "success", "message": f"IP {released['ip']} released for {request.username}"}
+            return {"status": "success", "message": f"IP {released['ip']} released for {resolved_username}"}
         
         return {"status": "success", "message": "No active session found"}
     except Exception as e:
@@ -263,7 +381,10 @@ def health_check():
 async def connect_event(request: ConnectEventRequest):
     db = get_db()
     try:
-        session = await db.vpn_sessions.find_one({"user_id": request.username, "is_active": True})
+        resolved_username, session = await resolve_session_identity(db, request.username, request.vpn_ip)
+        if not resolved_username or is_temp_openvpn_username(resolved_username):
+            return {"status": "error", "detail": "Unable to resolve VPN identity"}
+
         vpn_id = session["vpn_id"] if session else ""
 
         if not vpn_id and request.vpn_ip:
@@ -275,19 +396,35 @@ async def connect_event(request: ConnectEventRequest):
             if pool:
                 vpn_id = pool["pool_id"]
 
-        await db.vpn_sessions.update_one(
-            {"user_id": request.username, "is_active": True},
-            {"$set": {
+        if session:
+            await db.vpn_sessions.update_one(
+                {"user_id": resolved_username},
+                {"$set": {
+                    "is_active": True,
+                    "vpn_ip": request.vpn_ip,
+                    "source_ip": request.source_ip,
+                    "connected_at": datetime.utcnow(),
+                    "last_activity": datetime.utcnow()
+                }}
+            )
+        else:
+            await db.vpn_sessions.insert_one({
+                "session_id": str(uuid.uuid4()),
+                "user_id": resolved_username,
+                "vpn_id": vpn_id,
+                "assigned_ip": request.vpn_ip,
                 "vpn_ip": request.vpn_ip,
                 "source_ip": request.source_ip,
                 "connected_at": datetime.utcnow(),
-                "last_activity": datetime.utcnow()
-            }}
-        )
+                "last_activity": datetime.utcnow(),
+                "is_active": True
+            })
 
         await db.access_states.update_one(
-            {"user_id": request.username},
+            {"user_id": resolved_username},
             {"$set": {
+                "has_provisioned": True,
+                "provisioned_vpn": vpn_id,
                 "connected": True,
                 "connected_vpn": vpn_id,
                 "connected_ip": request.vpn_ip,
@@ -296,7 +433,21 @@ async def connect_event(request: ConnectEventRequest):
             upsert=True
         )
 
-        await log_audit(db, "connect", request.username, vpn_id, request.vpn_ip, request.source_ip)
+        await db.users.update_one(
+            {"user_id": resolved_username, "disabled": {"$ne": True}},
+            {"$set": {"status": "active"}}
+        )
+
+        await insert_vpn_event(
+            db,
+            "connect",
+            resolved_username,
+            vpn_ip=request.vpn_ip,
+            source_ip=request.source_ip,
+            vpn_id=vpn_id,
+            details=f"Connected to {vpn_id}"
+        )
+
         return {"status": "success"}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
@@ -305,18 +456,30 @@ async def connect_event(request: ConnectEventRequest):
 def get_openvpn_status():
     clients = query_openvpn_status()
 
-    recent_events = []
-    log_path = "/etc/openvpn/connect.log"
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, "r") as f:
-                lines = f.readlines()
-                recent_events = [line.strip() for line in lines[-50:]]
-        except Exception:
-            pass
-
     return {
         "connected_clients": clients,
-        "count": len(clients),
-        "recent_events": recent_events
+        "count": len(clients)
     }
+
+@app.get("/events")
+async def get_events(limit: int = 50, event_type: str = "", user_id: str = ""):
+    db = get_db()
+    query = {}
+    if event_type:
+        query["event_type"] = event_type.lower()
+    if user_id:
+        query["user_id"] = {"$regex": user_id, "$options": "i"}
+
+    cursor = db.vpn_events.find(query).sort("timestamp", -1).limit(limit)
+    events = await cursor.to_list(length=limit)
+    return [
+        {
+            "event_type": e.get("event_type") or e.get("event", "").lower(),
+            "user_id": e.get("user_id") or e.get("username", ""),
+            "vpn_ip": e.get("vpn_ip") or e.get("ip", ""),
+            "source_ip": e.get("source_ip", ""),
+            "details": e.get("details") or e.get("vpn_id", ""),
+            "timestamp": e.get("timestamp", "").isoformat() if e.get("timestamp") else ""
+        }
+        for e in events
+    ]

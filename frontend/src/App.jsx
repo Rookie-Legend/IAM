@@ -26,6 +26,17 @@ function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [accessState, setAccessState] = useState({ vpn_access: [] });
 
+  function handleLogout() {
+    setUser(null);
+    setToken(null);
+    setVpnMark(null);
+    setShowJoiner(false);
+    localStorage.removeItem('iam_user');
+    localStorage.removeItem('iam_token');
+    localStorage.removeItem('iam_active_tab');
+    setChatMessages([]);
+  }
+
   const fetchAccessState = async () => {
     if (!user || !token) return;
     const userId = user.user_id;
@@ -79,17 +90,6 @@ function App() {
     localStorage.setItem('iam_token', userToken);
     setShowJoiner(false);
     setActiveTab('chat');
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    setToken(null);
-    setVpnMark(null);
-    setShowJoiner(false);
-    localStorage.removeItem('iam_user');
-    localStorage.removeItem('iam_token');
-    localStorage.removeItem('iam_active_tab');
-    setChatMessages([]);
   };
 
   if (showJoiner) {

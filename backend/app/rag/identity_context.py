@@ -18,7 +18,7 @@ async def fetch_identity_context(user_id: str, db) -> str:
     vpn_access = state.get("vpn_access", []) if state else []
     resources = state.get("resources", []) if state else []
 
-    status = "inactive" if user.get("disabled") else user.get("status", "active")
+    status = await compute_user_status(db, user)
 
     lines = [
         "IDENTITY CONTEXT:",
@@ -31,3 +31,4 @@ async def fetch_identity_context(user_id: str, db) -> str:
         f"- Current Resources: {', '.join(resources) if resources else 'none'}",
     ]
     return "\n".join(lines)
+from app.services.user_status import compute_user_status

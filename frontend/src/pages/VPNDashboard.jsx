@@ -5,21 +5,30 @@ import { apiUrl } from '../stores/configStore';
 
 const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
     const [vpns, setVpns] = useState([]);
-    const [loading, setLoading] = useState(false);
     const [loadingVpn, setLoadingVpn] = useState(null);
+    const [switchModal, setSwitchModal] = useState({ open: false, vpnId: null });
     const [vpnStatus, setVpnStatus] = useState({
+        has_provisioned: false,
+        provisioned_vpn: null,
         is_connected: false,
         connected_vpn: null,
         connected_ip: null
     });
 
+    const provisionedVpnId = vpnStatus.provisioned_vpn;
+    const hasProvisionedSelection = vpnStatus.has_provisioned && Boolean(provisionedVpnId);
+
     useEffect(() => {
         if (user && token) {
-            fetchVpns();
+            refreshVpnData();
         }
     }, [user, token]);
 
     useEffect(() => {
+        if (!token) {
+            return undefined;
+        }
+
         const checkVpnStatus = async () => {
             try {
                 const res = await fetch(apiUrl('/api/vpn/my-status'), {
@@ -42,7 +51,7 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
         checkVpnStatus();
         const interval = setInterval(checkVpnStatus, 5000);
         return () => clearInterval(interval);
-    }, [token, vpnMark]);
+    }, [token, vpnMark, setVpnMark]);
 
     const fetchVpns = async () => {
         try {
@@ -54,6 +63,31 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
         } catch (err) {
             console.error('Failed to fetch VPNs:', err);
         }
+    };
+
+    const fetchVpnStatus = async () => {
+        try {
+            const res = await fetch(apiUrl('/api/vpn/my-status'), {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!res.ok) {
+                return;
+            }
+
+            const data = await res.json();
+            setVpnStatus(data);
+            if (data.is_connected) {
+                if (!vpnMark) setVpnMark(true);
+            } else {
+                setVpnMark(null);
+            }
+        } catch (err) {
+            console.error('Failed to fetch VPN status:', err);
+        }
+    };
+
+    const refreshVpnData = async () => {
+        await Promise.all([fetchVpns(), fetchVpnStatus()]);
     };
 
     const downloadProfile = async (vpnId) => {
@@ -93,13 +127,13 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
             const data = await res.json();
             
             if (res.status === 409) {
-                handleSwitch(vpnId);
+                await handleSwitch(vpnId);
                 return;
             }
             
             if (res.ok) {
                 await downloadProfile(vpnId);
-                fetchVpns();
+                await refreshVpnData();
             } else {
                 alert(data.detail || 'Provision failed');
             }
@@ -110,11 +144,18 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
         }
     };
 
-    const handleSwitch = async (vpnId) => {
-        if (!confirm(`Switch from ${vpnStatus.connected_vpn} to ${vpnId}? Your current VPN will be disconnected.`)) {
+    const openSwitchModal = (vpnId) => {
+        setSwitchModal({ open: true, vpnId });
+    };
+
+    const closeSwitchModal = () => {
+        if (loadingVpn !== null) {
             return;
         }
-        
+        setSwitchModal({ open: false, vpnId: null });
+    };
+
+    const handleSwitch = async (vpnId) => {
         setLoadingVpn(vpnId);
         try {
             const res = await fetch(apiUrl(`/api/vpn/switch/${vpnId}`), {
@@ -125,12 +166,8 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
             
             if (res.ok) {
                 await downloadProfile(vpnId);
-                fetchVpns();
-                setVpnStatus({
-                    is_connected: true,
-                    connected_vpn: vpnId,
-                    connected_ip: data.ip
-                });
+                await refreshVpnData();
+                closeSwitchModal();
             } else {
                 alert(data.detail || 'Switch failed');
             }
@@ -150,8 +187,8 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
         }
     };
 
-    const handleRevokeAccess = async (vpnId) => {
-        if (!confirm(`Are you sure you want to revoke your VPN access for ${vpnId}? You will need to request access again from an administrator.`)) {
+    const handleRevokeAccess = async () => {
+        if (!confirm(`Are you sure you want to revoke your VPN access? You will need to request access again from an administrator.`)) {
             return;
         }
         
@@ -164,11 +201,13 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
             
             if (res.ok) {
                 setVpnStatus({
+                    has_provisioned: false,
+                    provisioned_vpn: null,
                     is_connected: false,
                     connected_vpn: null,
                     connected_ip: null
                 });
-                fetchVpns();
+                await refreshVpnData();
                 setVpnMark(null);
                 alert('VPN access has been revoked.');
             } else {
@@ -186,19 +225,35 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
         if (!vpn.accessible) {
             return { text: 'Locked', icon: faLock, className: 'bg-elevated/50 border border-border-subtle text-text-secondary opacity-50 cursor-not-allowed', disabled: true };
         }
-        
-        if (vpn.is_current) {
-            return { text: 'Current', icon: faShieldHalved, className: 'bg-success/20 border border-success/30 text-success cursor-pointer', disabled: false, action: () => handleDownload(vpn.id) };
-        }
-        
-        if (vpn.has_active) {
-            return { text: `Switch to ${vpn.name.split(' ')[0]}`, icon: faArrowsRotate, className: 'bg-warning/20 border border-warning/30 text-warning hover:bg-warning/30 cursor-pointer', disabled: false, action: () => handleSwitch(vpn.id) };
-        }
-        
-        return { text: 'Download', icon: faDownload, className: 'bg-accent-blue text-white hover:bg-blue-600 cursor-pointer', disabled: false, action: () => handleProvision(vpn.id) };
-    };
 
-    const currentVpn = vpns.find(v => v.is_current);
+        if (vpn.has_provisioned && provisionedVpnId === vpn.id) {
+            return {
+                text: vpnStatus.is_connected ? 'Download Current Profile' : 'Download Profile',
+                icon: faDownload,
+                className: 'bg-success/20 border border-success/30 text-success cursor-pointer',
+                disabled: false,
+                action: () => handleDownload(vpn.id)
+            };
+        }
+
+        if (hasProvisionedSelection) {
+            return {
+                text: `Switch to ${vpn.name.split(' ')[0]}`,
+                icon: faArrowsRotate,
+                className: 'bg-accent-blue text-white hover:bg-blue-600 cursor-pointer',
+                disabled: false,
+                action: () => openSwitchModal(vpn.id)
+            };
+        }
+
+        return {
+            text: 'Provision and Download',
+            icon: faDownload,
+            className: 'bg-accent-blue text-white hover:bg-blue-600 cursor-pointer',
+            disabled: false,
+            action: () => handleProvision(vpn.id)
+        };
+    };
 
     return (
         <div className="h-full flex items-center justify-center bg-bg p-6">
@@ -223,24 +278,6 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
                             </span>
                         )}
                     </div>
-                    
-                    {currentVpn && (
-                        <div className="mb-4 space-y-2">
-                            <div className="p-2 bg-success/10 border border-success/20 rounded-lg">
-                                <p className="text-xs text-success font-medium">
-                                    You have an active VPN configuration. Download it to connect.
-                                </p>
-                            </div>
-                            <button
-                                onClick={() => handleRevokeAccess(currentVpn.id)}
-                                disabled={loadingVpn !== null}
-                                className="w-full py-2 px-4 bg-error/10 border border-error/30 text-error rounded-lg text-sm font-medium hover:bg-error/20 transition-all flex items-center justify-center gap-2"
-                            >
-                                <FontAwesomeIcon icon={faBan} className="text-sm" />
-                                {loadingVpn === 'revoke' ? 'Revoking...' : 'Revoke Access'}
-                            </button>
-                        </div>
-                    )}
                     
                     <p className="text-xs text-text-muted mb-5">Available VPN profiles for your account:</p>
 
@@ -274,10 +311,56 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
                             })}
                         </div>
                     )}
+
+                    {vpnStatus.has_provisioned && (
+                        <button
+                            onClick={handleRevokeAccess}
+                            disabled={loadingVpn !== null}
+                            className="w-full mt-4 py-2.5 px-4 bg-error/10 border border-error/30 text-error rounded-xl text-sm font-semibold hover:bg-error/20 transition-all flex items-center justify-center gap-2"
+                        >
+                            <FontAwesomeIcon icon={faBan} className="text-sm" />
+                            {loadingVpn === 'revoke' ? 'Revoking...' : 'Revoke Access'}
+                        </button>
+                    )}
                 </div>
 
                 <p className="text-[11px] text-text-muted/50">* Access is governed by CorpOD IAM policies</p>
             </div>
+
+            {switchModal.open && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm p-4"
+                    style={{ backgroundColor: 'var(--color-overlay)' }}
+                    onClick={closeSwitchModal}
+                >
+                    <div
+                        className="w-full max-w-md rounded-2xl border border-border-subtle bg-surface p-6 text-left shadow-xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3 className="text-lg font-bold text-text">Switch VPN Profile</h3>
+                        <p className="mt-2 text-sm text-text-muted">
+                            Switch from {vpnStatus.provisioned_vpn || vpnStatus.connected_vpn || 'your current VPN'} to {switchModal.vpnId}?
+                            The currently provisioned profile will be revoked and replaced.
+                        </p>
+                        <div className="mt-6 flex justify-end gap-3">
+                            <button
+                                onClick={closeSwitchModal}
+                                disabled={loadingVpn !== null}
+                                className="rounded-xl border border-border-subtle px-4 py-2 text-sm font-semibold text-text-muted transition-all hover:bg-hover disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => handleSwitch(switchModal.vpnId)}
+                                disabled={loadingVpn !== null}
+                                className="rounded-xl bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-blue-600 disabled:opacity-50"
+                            >
+                                {loadingVpn === switchModal.vpnId ? 'Switching...' : 'Confirm Switch'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

@@ -225,7 +225,7 @@ const AuditDashboard = ({ token }) => {
                         </span>
                       </td>
                       <td className="p-3">
-                        <code className="text-[12px] bg-white/5 px-1.5 py-0.5 rounded">{log.user_id || '—'}</code>
+                        <code className="text-[12px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--color-code-bg)' }}>{log.user_id || '—'}</code>
                       </td>
                       <td className="p-3 text-text-muted text-[12px]">
                         {log.vpn_ip || '—'}
@@ -289,7 +289,7 @@ const AuditDashboard = ({ token }) => {
                         {new Date(log.timestamp).toLocaleString()}
                       </td>
                       <td className="p-3">
-                        <code className="text-[12px] bg-white/5 px-1.5 py-0.5 rounded">{log.user_id || '—'}</code>
+                        <code className="text-[12px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--color-code-bg)' }}>{log.user_id || '—'}</code>
                       </td>
                       <td className="p-3">
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${decisionColor(log.action)}`}>
@@ -309,7 +309,7 @@ const AuditDashboard = ({ token }) => {
       )}
 
       {selectedLog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setSelectedLog(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm" style={{ backgroundColor: 'var(--color-overlay)' }} onClick={() => setSelectedLog(null)}>
           <div className="bg-surface border border-border rounded-xl p-6 max-w-2xl w-full mx-4 shadow-xl" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold">{selectedLog.isVpnLog ? 'VPN Log' : 'Access Request'} Details</h2>
@@ -327,7 +327,7 @@ const AuditDashboard = ({ token }) => {
                 </div>
                 <div className="flex gap-2">
                   <span className="text-text-muted w-24">User:</span>
-                  <code className="bg-white/5 px-1.5 py-0.5 rounded">{selectedLog.user_id || '—'}</code>
+                  <code className="px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--color-code-bg)' }}>{selectedLog.user_id || '—'}</code>
                 </div>
                 <div className="flex gap-2">
                   <span className="text-text-muted w-24">VPN IP:</span>

@@ -48,7 +48,7 @@ async def seed_db():
             "full_name": "Admin",
             "department": "Security",
             "role": "Security Admin",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -59,7 +59,7 @@ async def seed_db():
             "full_name": "HR Manager",
             "department": "HR",
             "role": "HR Manager",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -70,7 +70,7 @@ async def seed_db():
             "full_name": "Cloud Infra Engineer",
             "department": "Engineering",
             "role": "devops_engineer",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -81,7 +81,7 @@ async def seed_db():
             "full_name": "Frontend Engineer",
             "department": "Engineering",
             "role": "software_engineer",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -92,7 +92,7 @@ async def seed_db():
             "full_name": "Backend Engineer",
             "department": "Engineering",
             "role": "software_engineer",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -103,7 +103,7 @@ async def seed_db():
             "full_name": "Payroll Auditor",
             "department": "Finance",
             "role": "financial_analyst",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -114,7 +114,7 @@ async def seed_db():
             "full_name": "Compliance Auditor",
             "department": "Finance",
             "role": "financial_analyst",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         },
         {
@@ -125,7 +125,7 @@ async def seed_db():
             "full_name": "Haresh",
             "department": "Security",
             "role": "Security Admin",
-            "status": "active",
+            "status": "inactive",
             "disabled": False
         }
         
@@ -243,9 +243,9 @@ async def seed_db():
     await db.access_states.insert_many(access_states_data)
     print("Seeded Access States")
 
-    await db.vpn_audit_logs.create_index("timestamp")
-    await db.vpn_audit_logs.create_index("user_id")
-    await db.vpn_audit_logs.create_index("event_type")
+    await db.vpn_events.create_index("timestamp")
+    await db.vpn_events.create_index("user_id")
+    await db.vpn_events.create_index("event_type")
     print("Created VPN audit logs indexes")
 
     print("Database seeding completed.")

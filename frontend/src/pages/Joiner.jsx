@@ -153,17 +153,17 @@ export default function Joiner({ onBack }) {
 
   if (step === 'otp') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#f6f6f6] py-10">
-        <div className="w-full max-w-md bg-white rounded-lg shadow-xl overflow-hidden" style={{ maxWidth: '400px' }}>
+      <div className="min-h-screen flex items-center justify-center bg-bg text-text py-10">
+        <div className="w-full max-w-md bg-surface border border-border-subtle rounded-2xl overflow-hidden" style={{ maxWidth: '400px', boxShadow: 'var(--color-shadow-strong)' }}>
           <div className="p-8">
             <div className="text-center mb-6">
               <div className="flex justify-center mb-4">
                 <img src="/logo.png" alt="CorpOD Logo" className="h-12" />
               </div>
-              <h2 className="text-2xl font-bold text-gray-800">CorpOD Security</h2>
+              <h2 className="text-2xl font-bold text-text">CorpOD Security</h2>
             </div>
 
-            <p className="text-gray-600 text-center mb-8">
+            <p className="text-text-muted text-center mb-8">
               Enter the 6-digit code sent to your email
             </p>
 
@@ -197,14 +197,15 @@ export default function Joiner({ onBack }) {
                         document.getElementById(`otp-${i - 1}`)?.focus();
                       }
                     }}
-                    className="w-11 h-13 bg-white border border-gray-300 rounded-lg text-center text-2xl font-bold text-gray-800 outline-none focus:border-[#007bff] focus:ring-1 focus:ring-[#007bff]/30 transition-all shadow-sm"
+                    className="w-11 h-13 bg-elevated border border-border rounded-lg text-center text-2xl font-bold text-text outline-none focus:border-accent-blue focus:ring-1 transition-all shadow-sm"
+                    style={{ boxShadow: '0 1px 2px var(--color-border)', '--tw-ring-color': 'var(--color-accent-blue-muted)' }}
                     required
                   />
                 ))}
               </div>
 
               {errorMsg && (
-                <div className="text-red-500 text-sm px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-center">
+                <div className="text-error text-sm px-4 py-3 bg-error/10 border border-error/20 rounded-lg text-center">
                   {errorMsg}
                 </div>
               )}
@@ -212,27 +213,27 @@ export default function Joiner({ onBack }) {
               <button
                 type="submit"
                 disabled={loading || otp.length < 6}
-                className="w-full py-3 bg-[#007bff] text-white rounded-lg text-sm font-semibold hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                className="w-full py-3 bg-accent-blue text-white rounded-lg text-sm font-semibold hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
                 {loading ? 'Verifying...' : 'Verify Code'}
               </button>
             </form>
 
-            <div className="mt-6 text-center border-t border-gray-200 pt-4">
-              <p className="text-xs text-gray-500 mb-2">This code expires in 5 minutes.</p>
-              <p className="text-xs text-gray-400">
+            <div className="mt-6 text-center border-t border-border-subtle pt-4">
+              <p className="text-xs text-text-muted mb-2">This code expires in 5 minutes.</p>
+              <p className="text-xs text-text-muted/70">
                 If you didn't request this, you can safely ignore this email.
               </p>
             </div>
 
             <div className="mt-4 text-center">
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-text-muted">
                 Didn't receive the code?{' '}
                 <button
                   type="button"
                   onClick={handleRequestOtp}
                   disabled={loading}
-                  className="text-[#007bff] font-semibold hover:underline"
+                  className="text-accent-blue font-semibold hover:underline"
                 >
                   Resend OTP
                 </button>

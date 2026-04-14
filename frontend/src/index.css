@@ -19,6 +19,10 @@
   --color-warning: #f59e0b;
   --color-warning-bg: rgba(245, 158, 11, 0.12);
   --color-warning-muted: rgba(245, 158, 11, 0.15);
+  --color-overlay: rgba(0, 0, 0, 0.55);
+  --color-code-bg: rgba(255, 255, 255, 0.06);
+  --color-soft-accent: rgba(59, 130, 246, 0.08);
+  --color-shadow-strong: 0 20px 50px rgba(0, 0, 0, 0.35);
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
@@ -40,6 +44,14 @@
   --color-error-bg: rgba(239, 68, 68, 0.1);
   --color-warning-bg: rgba(245, 158, 11, 0.1);
   --color-warning-muted: rgba(245, 158, 11, 0.1);
+  --color-overlay: rgba(15, 23, 42, 0.22);
+  --color-code-bg: rgba(15, 23, 42, 0.06);
+  --color-soft-accent: rgba(59, 130, 246, 0.06);
+  --color-shadow-strong: 0 18px 40px rgba(15, 23, 42, 0.12);
+}
+
+html, body, #root {
+  height: 100%;
 }
 
 body {

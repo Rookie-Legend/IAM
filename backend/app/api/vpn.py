@@ -18,10 +18,13 @@ class AllocateRequest(BaseModel):
 async def get_available_vpns(db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
     state = await db["access_states"].find_one({"user_id": current_user.user_id})
     user_vpns = state.get("vpn_access", []) if state else []
+    provisioned_vpn = state.get("provisioned_vpn") if state else None
+    has_provisioned = bool(state.get("has_provisioned")) if state else False
     
     active_session = await db["vpn_sessions"].find_one({
         "user_id": current_user.user_id,
-        "is_active": True
+        "is_active": True,
+        "connected_at": {"$ne": None}
     })
     current_vpn = active_session["vpn_id"] if active_session else None
     
@@ -36,7 +39,9 @@ async def get_available_vpns(db=Depends(get_database), current_user: UserInDB = 
             "department": pool["department"],
             "accessible": pool["pool_id"] in user_vpns,
             "is_current": pool["pool_id"] == current_vpn,
-            "has_active": current_vpn is not None
+            "has_provisioned": has_provisioned and pool["pool_id"] == provisioned_vpn,
+            "has_any_provisioned": has_provisioned,
+            "has_active": current_vpn is not None and pool["pool_id"] != current_vpn
         }
         for pool in pools
     ]
@@ -44,18 +49,36 @@ async def get_available_vpns(db=Depends(get_database), current_user: UserInDB = 
 @router.get("/my-status")
 async def get_my_status(db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
     state = await db["access_states"].find_one({"user_id": current_user.user_id})
+    active_session = await db["vpn_sessions"].find_one({
+        "user_id": current_user.user_id,
+        "is_active": True,
+        "connected_at": {"$ne": None}
+    })
+
     if not state:
         return {
             "is_connected": False,
-            "connected_vpn": None,
-            "connected_ip": None,
-            "connected_at": None
+            "has_provisioned": False,
+            "provisioned_vpn": None,
+            "connected_vpn": active_session.get("vpn_id") if active_session else None,
+            "connected_ip": (active_session.get("vpn_ip") or active_session.get("assigned_ip")) if active_session else None,
+            "connected_at": active_session.get("connected_at") if active_session else None
         }
+
+    derived_connected = bool(active_session)
+    derived_vpn = (active_session.get("vpn_id") if active_session else None) or state.get("connected_vpn")
+    derived_ip = ((active_session.get("vpn_ip") or active_session.get("assigned_ip")) if active_session else None) or state.get("connected_ip")
+    derived_connected_at = (active_session.get("connected_at") if active_session else None) or state.get("connected_at")
+    derived_provisioned = bool(state.get("has_provisioned", False))
+    derived_provisioned_vpn = state.get("provisioned_vpn")
+
     return {
-        "is_connected": state.get("connected", False),
-        "connected_vpn": state.get("connected_vpn"),
-        "connected_ip": state.get("connected_ip"),
-        "connected_at": state.get("connected_at")
+        "is_connected": derived_connected,
+        "has_provisioned": derived_provisioned,
+        "provisioned_vpn": derived_provisioned_vpn,
+        "connected_vpn": derived_vpn,
+        "connected_ip": derived_ip,
+        "connected_at": derived_connected_at
     }
 
 @router.post("/provision/{vpn_id}")
@@ -66,7 +89,8 @@ async def provision_vpn(vpn_id: str, db=Depends(get_database), current_user: Use
 
     active_session = await db["vpn_sessions"].find_one({
         "user_id": current_user.user_id,
-        "is_active": True
+        "is_active": True,
+        "connected_at": {"$ne": None}
     })
     
     if active_session:
@@ -75,6 +99,14 @@ async def provision_vpn(vpn_id: str, db=Depends(get_database), current_user: Use
         raise HTTPException(
             status_code=409,
             detail=f"You have an active VPN ({active_session['vpn_id']}). Use Switch to change VPNs or revoke first."
+        )
+
+    if state.get("has_provisioned") and state.get("provisioned_vpn"):
+        if state["provisioned_vpn"] == vpn_id:
+            return {"status": "already_provisioned", "message": "VPN profile already provisioned"}
+        raise HTTPException(
+            status_code=409,
+            detail=f"You already have a provisioned VPN ({state['provisioned_vpn']}). Use Switch to change it or revoke first."
         )
 
     pool = await db["vpn_ip_pools"].find_one({"pool_id": vpn_id, "is_active": True})
@@ -106,17 +138,27 @@ async def switch_vpn(new_vpn_id: str, db=Depends(get_database), current_user: Us
 
     active_session = await db["vpn_sessions"].find_one({
         "user_id": current_user.user_id,
-        "is_active": True
+        "is_active": True,
+        "connected_at": {"$ne": None}
     })
-    
-    if not active_session:
-        raise HTTPException(status_code=400, detail="No active VPN to switch from. Use Provision instead.")
+    provisioned_session = await db["vpn_sessions"].find_one({"user_id": current_user.user_id})
 
-    if active_session["vpn_id"] == new_vpn_id:
-        return {"status": "already_active", "message": "Already on this VPN", "ip": active_session["assigned_ip"]}
+    current_vpn_id = (
+        active_session["vpn_id"] if active_session else
+        (state.get("provisioned_vpn") or (provisioned_session.get("vpn_id") if provisioned_session else None))
+    )
+    current_ip = (
+        active_session.get("assigned_ip") if active_session else
+        (provisioned_session.get("assigned_ip") if provisioned_session else None)
+    )
 
-    old_vpn_id = active_session["vpn_id"]
-    old_ip = active_session["assigned_ip"]
+    if not current_vpn_id:
+        raise HTTPException(status_code=400, detail="No provisioned VPN to switch from. Use Provision instead.")
+
+    if current_vpn_id == new_vpn_id:
+        if active_session:
+            return {"status": "already_active", "message": "Already on this VPN", "ip": current_ip}
+        return {"status": "already_provisioned", "message": "VPN profile already provisioned", "ip": current_ip}
 
     async with httpx.AsyncClient() as client:
         try:
@@ -146,21 +188,18 @@ async def switch_vpn(new_vpn_id: str, db=Depends(get_database), current_user: Us
 
     return {
         "status": "success",
-        "message": f"Switched from {old_vpn_id} ({old_ip}) to {new_vpn_id} ({result.get('ip')})",
-        "old_vpn": old_vpn_id,
+        "message": f"Switched from {current_vpn_id} ({current_ip}) to {new_vpn_id} ({result.get('ip')})",
+        "old_vpn": current_vpn_id,
         "new_vpn": new_vpn_id,
         "ip": result.get("ip")
     }
 
 @router.get("/download-profile")
 async def download_vpn_profile(db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
-    active_session = await db["vpn_sessions"].find_one({
-        "user_id": current_user.user_id,
-        "is_active": True
-    })
+    state = await db["access_states"].find_one({"user_id": current_user.user_id})
     
-    if not active_session:
-        raise HTTPException(status_code=403, detail="No active VPN session. Please provision a VPN first.")
+    if not state or not state.get("has_provisioned"):
+        raise HTTPException(status_code=403, detail="No VPN provisioned. Please provision a VPN first.")
 
     async with httpx.AsyncClient() as client:
         try:
@@ -176,26 +215,26 @@ async def download_vpn_profile(db=Depends(get_database), current_user: UserInDB 
 
 @router.post("/disconnect")
 async def disconnect_vpn(db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
+    state = await db["access_states"].find_one({"user_id": current_user.user_id})
     active_session = await db["vpn_sessions"].find_one({
         "user_id": current_user.user_id,
         "is_active": True
     })
     
-    if not active_session:
-        return {"status": "success", "message": "No active session to disconnect"}
+    if not active_session and not (state and state.get("has_provisioned")):
+        return {"status": "success", "message": "No active session or provisioned VPN to revoke"}
 
     async with httpx.AsyncClient() as client:
         try:
             res = await client.post(
-                f"{settings.VPN_SERVER_URL}/release-ip",
-                json={"username": current_user.user_id, "vpn_ip": "", "source_ip": ""},
+                f"{settings.VPN_SERVER_URL}/users/{current_user.user_id}/revoke",
                 timeout=10.0
             )
             res.raise_for_status()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Disconnect error: {str(e)}")
 
-    return {"status": "success", "message": "Disconnected"}
+    return {"status": "success", "message": "Disconnected and access revoked"}
 
 @router.post("/revoke/{user_id}")
 async def revoke_vpn(user_id: str, db=Depends(get_database), admin=Depends(get_current_admin)):
@@ -210,27 +249,25 @@ async def revoke_vpn(user_id: str, db=Depends(get_database), admin=Depends(get_c
 
 @router.get("/audit-logs")
 async def get_audit_logs(
-    limit: int = Query(100, le=500),
-    event_type: str = Query(None),
-    user_id: str = Query(None),
-    db=Depends(get_database),
+    limit: int = Query(50, le=500),
+    event_type: str = Query(""),
+    user_id: str = Query(""),
     current_user: UserInDB = Depends(get_current_user)
 ):
-    query = {}
-    if event_type:
-        query["event_type"] = event_type
-    if user_id:
-        query["user_id"] = user_id
+    async with httpx.AsyncClient() as client:
+        try:
+            params = {"limit": limit}
+            if event_type:
+                params["event_type"] = event_type
+            if user_id:
+                params["user_id"] = user_id
+            res = await client.get(f"{settings.VPN_SERVER_URL}/events", params=params, timeout=10.0)
+            res.raise_for_status()
+            events = res.json()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch VPN events: {str(e)}")
 
-    cursor = db.vpn_audit_logs.find(query).sort("timestamp", -1).limit(limit)
-    logs = await cursor.to_list(length=limit)
-    
-    for log in logs:
-        log["_id"] = str(log["_id"])
-        if log.get("timestamp"):
-            log["timestamp"] = log["timestamp"].isoformat()
-
-    return {"logs": logs, "count": len(logs)}
+    return {"logs": events, "count": len(events)}
 
 @router.get("/admin/sessions")
 async def get_all_sessions(

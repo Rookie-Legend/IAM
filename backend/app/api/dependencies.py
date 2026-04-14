@@ -4,6 +4,7 @@ from jose import jwt, JWTError
 from app.core.config import settings
 from app.core.database import get_database
 from app.models.user import UserInDB
+from app.services.user_status import apply_user_status
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -30,6 +31,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db=Depends(get_d
     if user_data.get("disabled", False):
         raise HTTPException(status_code=400, detail="Your account has been disabled.")
 
+    user_data = await apply_user_status(db, user_data)
     return UserInDB(**user_data)
 
 async def get_current_admin(current_user: UserInDB = Depends(get_current_user)):
