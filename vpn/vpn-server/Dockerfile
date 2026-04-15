@@ -7,5 +7,5 @@ COPY . .
 RUN chmod +x /app/entrypoint.sh /app/client-connect.sh /app/client-disconnect.sh /app/session_sync.py
 RUN mkdir -p /etc/openvpn && chmod 755 /etc/openvpn
 EXPOSE 4000 1194/udp
-RUN sed -i 's/\r$//' /app/entrypoint.sh /app/client-connect.sh /app/client-disconnect.sh /app/session_sync.pyd
+RUN sed -i 's/\r$//' /app/entrypoint.sh /app/client-connect.sh /app/client-disconnect.sh /app/session_sync.py
 CMD ["/app/entrypoint.sh"]

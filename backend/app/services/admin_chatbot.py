@@ -28,6 +28,9 @@ DEPT_PREFIX_MAP = {
 
 DEFAULT_PREFIX = "U"
 
+# Departments that are registered in this system (must match VPN policy entries)
+ALLOWED_DEPARTMENTS = {"engineering", "finance", "hr", "sales", "security"}
+
 
 def _get_prefix_for_department(department: str) -> str:
     dept_lower = department.lower().replace(" ", "_")
@@ -104,17 +107,20 @@ Available intents:
 
 Always respond with valid JSON only. No text outside JSON.
 
-For joiner — REQUIRED fields: name, department. OPTIONAL: user_id, email (auto-generated if absent), role (guess from dept):
+For joiner — REQUIRED fields: name, department, role, email. OPTIONAL: user_id (auto-generated if absent).
+NEVER guess or infer role from department. ONLY set role if the user explicitly stated it.
+NEVER auto-generate email. ONLY set email if the user explicitly provided it.
+Only accept department values from: engineering, finance, hr, sales, security.
 {
     "intent": "joiner",
     "entities": {
         "user_id":    "U1001 or null if not given",
         "name":       "full name or null",
-        "email":      "email or null",
-        "department": "engineering/finance/hr/product or null",
-        "role":       "exact role or best guess or null"
+        "email":      "email ONLY if explicitly given by user, else null",
+        "department": "engineering/finance/hr/sales/security or null",
+        "role":       "exact role ONLY if explicitly stated by user, else null"
     },
-    "missing_fields": ["ONLY list name and/or department if they are truly absent — NEVER list user_id or email"],
+    "missing_fields": ["list name, department, role, and/or email if they are truly absent — NEVER list user_id"],
     "confidence": "HIGH/MEDIUM/LOW",
     "message": "what you understood"
 }
@@ -296,19 +302,97 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         return ADMIN_HELP_TEXT
 
     if intent == "joiner":
-        if missing and any(f in missing for f in ["name", "department"]):
-            return f"I need a few more details to onboard this employee. Missing: **{', '.join(missing)}**. Can you provide them?"
+        name = entities.get("name") or None
+        dept_raw = entities.get("department") or None
+        dept = dept_raw.lower().strip() if dept_raw else None
+        role = entities.get("role") or None
 
-        dept = entities.get("department", "engineering")
-        user_id = entities.get("user_id") or await generate_user_id(db, dept)
-        name = entities.get("name", "Unknown")
-        email = entities.get("email") or f"{name.lower().replace(' ', '.')}@company.com"
-        role = entities.get("role", "software_engineer")
+        dept_list_str = ", ".join(sorted(ALLOWED_DEPARTMENTS))
 
-        existing = await db["users"].find_one({"user_id": user_id})
-        if existing:
-            return f"⚠️ User **{user_id}** already exists in the directory."
+        # ── Gate 1: Ask for name first, alone ──
+        if not name:
+            return (
+                "Let's onboard a new employee.\n\n"
+                "Please provide the employee's **full name**."
+            )
 
+        # ── Gate 2: Ask for department next, alone — show allowed list upfront ──
+        if not dept:
+            return (
+                f"Got it — **{name}**.\n\n"
+                f"Which **department** will they be joining?\n"
+                f"Available departments: **{dept_list_str}**"
+            )
+
+        # ── Gate 3: Department allowlist check ──
+        if dept not in ALLOWED_DEPARTMENTS:
+            return (
+                f"⚠️ **'{dept_raw}'** is not a registered department in this system.\n\n"
+                f"Currently available departments: **{dept_list_str}**\n\n"
+                "Please choose one of the departments listed above, or contact the system administrator to add a new one."
+            )
+
+        # ── Gate 4: Ask for role next, alone — with department-specific hints ──
+        if not role:
+            dept_role_hints = {
+                "engineering": "e.g. software_engineer, devops_engineer, qa_engineer",
+                "finance": "e.g. financial_analyst, accountant, finance_manager",
+                "hr": "e.g. hr_manager, hr_executive, recruiter",
+                "sales": "e.g. sales_executive, account_manager, sales_analyst",
+                "security": "e.g. security_analyst, security_engineer, soc_lead",
+            }
+            hint = dept_role_hints.get(dept, "e.g. analyst, manager, executive")
+            return (
+                f"Great — **{name}** joining **{dept}**.\n\n"
+                f"What is their **role** in the organisation?\n"
+                f"({hint})"
+            )
+
+        # ── Gate 5: Generate or validate user_id ──
+        provided_user_id = entities.get("user_id")
+        if provided_user_id:
+            user_id = provided_user_id
+        else:
+            user_id = await generate_user_id(db, dept)
+
+        # ── Gate 6: Username uniqueness check ──
+        existing_by_id = await db["users"].find_one({"user_id": user_id})
+        existing_by_username = await db["users"].find_one({"username": user_id})
+        if existing_by_id or existing_by_username:
+            base = user_id
+            suffix = 2
+            while await db["users"].find_one({"$or": [{"user_id": f"{base}_{suffix}"}, {"username": f"{base}_{suffix}"}]}):
+                suffix += 1
+            suggestion = f"{base}_{suffix}"
+            return (
+                f"⚠️ Username **{user_id}** is already taken in the directory.\n\n"
+                f"Suggested alternative: **{suggestion}**\n\n"
+                "Please confirm this suggestion or provide a different unique username to proceed."
+            )
+
+        # ── Gate 7: Ask for email if not provided ──
+        email = entities.get("email") or None
+        if not email:
+            return (
+                f"Almost done — **{name}** joining **{dept}** as **{role}**.\n\n"
+                "Please provide the employee's **email address**."
+            )
+
+        # ── Gate 8: Email uniqueness check ──
+        existing_email = await db["users"].find_one({"email": email})
+        if existing_email:
+            parts = email.split("@")
+            counter = 2
+            while await db["users"].find_one({"email": f"{parts[0]}{counter}@{parts[1]}"}):
+                counter += 1
+            suggested_email = f"{parts[0]}{counter}@{parts[1]}"
+            return (
+                f"⚠️ Email **{email}** is already registered in the system.\n\n"
+                f"Suggested alternative: **{suggested_email}**\n\n"
+                "Please confirm this email or provide a different unique one to proceed."
+            )
+
+        # ── All checks passed — create the user ──
         new_user = {
             "user_id": user_id,
             "username": user_id,
@@ -318,7 +402,6 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             "role": role,
             "status": "inactive",
             "disabled": False,
-
             "hashed_password": get_password_hash("TempPass@123")
         }
         await db["users"].insert_one(new_user)
@@ -501,13 +584,28 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         if not employees:
             return "Please provide the employee details. You can list them or upload a CSV."
 
+        dept_list_str = ", ".join(sorted(ALLOWED_DEPARTMENTS))
         results = []
         for emp in employees:
-            dept = emp.get("department", "engineering")
-            user_id = await generate_user_id(db, dept)
+            dept_raw = emp.get("department", "")
+            dept = dept_raw.lower().strip() if dept_raw else ""
             name = emp.get("name", "Unknown")
+
+            # Department allowlist check per employee
+            if dept not in ALLOWED_DEPARTMENTS:
+                results.append(
+                    f"⚠️ {name} — skipped: '{dept_raw}' is not a registered department "
+                    f"(allowed: {dept_list_str})"
+                )
+                continue
+
+            user_id = await generate_user_id(db, dept)
             email = emp.get("email") or f"{name.lower().replace(' ', '.')}@company.com"
-            role = emp.get("role", "software_engineer")
+            role = emp.get("role") or None
+
+            if not role:
+                results.append(f"⚠️ {name} — skipped: role not specified")
+                continue
 
             new_user = {
                 "user_id": user_id,
