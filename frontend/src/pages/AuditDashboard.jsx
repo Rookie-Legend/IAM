@@ -8,9 +8,13 @@ const AuditDashboard = ({ token }) => {
   const [vpnLogs, setVpnLogs] = useState([]);
   const [filter, setFilter] = useState('');
   const [vpnFilter, setVpnFilter] = useState('');
-  const [viewMode, setViewMode] = useState('system');
+  const [viewMode, setViewMode] = useState(() => localStorage.getItem('iam_audit_tab') || 'system');
   const [vpnEventFilter, setVpnEventFilter] = useState('all');
   const [selectedLog, setSelectedLog] = useState(null);
+
+  useEffect(() => {
+    localStorage.setItem('iam_audit_tab', viewMode);
+  }, [viewMode]);
 
   useEffect(() => {
     const fetchLogs = async () => {

@@ -36,7 +36,7 @@ const AdminDashboard = ({ token }) => {
   const [saved, setSaved] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [stats, setStats] = useState(null);
-  const [activeTab, setActiveTab] = useState('users');
+  const [activeTab, setActiveTab] = useState(() => localStorage.getItem('iam_admin_tab') || 'users');
   const [searchTerm, setSearchTerm] = useState('');
   
   // Custom Confirmation Modal State
@@ -45,6 +45,11 @@ const AdminDashboard = ({ token }) => {
     action: null, // 'disable', 'reinstate', 'offboard'
     userId: null,
     inputValue: ''
+  });
+  const [deletePolicyModal, setDeletePolicyModal] = useState({
+    isOpen: false,
+    policyId: null,
+    policyName: ''
   });
 
   const authHeaders = {
@@ -89,6 +94,10 @@ const AdminDashboard = ({ token }) => {
     fetchUsers();
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem('iam_admin_tab', activeTab);
+  }, [activeTab]);
+
   const handleSave = async () => {
     if (!newPolicy.name || !newPolicy.description) {
       alert('Please fill in name and description');
@@ -119,9 +128,10 @@ const AdminDashboard = ({ token }) => {
     });
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm('Delete this policy?')) return;
-    await fetch(apiUrl(`/api/policies/${id}`), { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+  const handleDelete = async () => {
+    if (!deletePolicyModal.policyId) return;
+    await fetch(apiUrl(`/api/policies/${deletePolicyModal.policyId}`), { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+    setDeletePolicyModal({ isOpen: false, policyId: null, policyName: '' });
     fetchPolicies();
   };
 
@@ -159,6 +169,18 @@ const AdminDashboard = ({ token }) => {
 
   const cancelConfirm = () => {
     setConfirmModal({ isOpen: false, action: null, userId: null, inputValue: '' });
+  };
+
+  const openDeletePolicyModal = (policyId, policyName) => {
+    setDeletePolicyModal({
+      isOpen: true,
+      policyId,
+      policyName
+    });
+  };
+
+  const closeDeletePolicyModal = () => {
+    setDeletePolicyModal({ isOpen: false, policyId: null, policyName: '' });
   };
 
   const filteredUsers = users.filter(u => {
@@ -412,7 +434,7 @@ const AdminDashboard = ({ token }) => {
                         <FontAwesomeIcon icon={p.is_active ? faShieldHalved : faShieldHalved} />
                       </button>
                       <button className="p-1.5 rounded hover:bg-hover transition-all" onClick={() => handleEdit(p)}><FontAwesomeIcon icon={faPencil} /></button>
-                      <button className="p-1.5 rounded hover:bg-error/10 transition-all text-error" onClick={() => handleDelete(p.pol_id)}><FontAwesomeIcon icon={faTrashCan} /></button>
+                      <button className="p-1.5 rounded hover:bg-error/10 transition-all text-error" onClick={() => openDeletePolicyModal(p.pol_id, p.name)}><FontAwesomeIcon icon={faTrashCan} /></button>
                     </div>
                   </div>
                   <p className="text-[12px] text-text-muted mb-3">{p.description}</p>
@@ -489,6 +511,32 @@ const AdminDashboard = ({ token }) => {
                 {confirmModal.action === 'offboard' ? 'Confirm Offboarding' :
                  confirmModal.action === 'disable' ? 'Disable Account' :
                  'Reinstate User'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deletePolicyModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm" style={{ backgroundColor: 'var(--color-overlay)' }}>
+          <div className="bg-surface border border-border rounded-xl p-6 max-w-sm w-full" style={{ boxShadow: 'var(--color-shadow-strong)' }}>
+            <h3 className="text-lg font-bold text-text mb-2">Delete Policy</h3>
+            <p className="text-sm text-text-muted mb-5 leading-relaxed">
+              Delete policy <strong className="text-text">{deletePolicyModal.policyName || deletePolicyModal.policyId}</strong>? This cannot be undone.
+            </p>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={closeDeletePolicyModal}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-text-muted hover:text-text hover:bg-hover transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-error text-white hover:opacity-90 transition-all"
+              >
+                Delete Policy
               </button>
             </div>
           </div>
