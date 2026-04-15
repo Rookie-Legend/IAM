@@ -18,6 +18,7 @@ from app.rag.identity_context import fetch_identity_context
 from app.rag.policy_context import fetch_policy_context
 from app.rag.audit_context import fetch_audit_context
 from app.rag.user_access_rag import refresh_policy_index
+from app.services.vpn_catalog import resolve_vpn_request
 
 # --------------------------------------------------------------------------- #
 #  Groq client (singleton)
@@ -161,7 +162,9 @@ DECISION RULES:
 --------------------------------------------------
 
 1. IDENTITY RULE:
-- If the user is inactive/disabled → ALWAYS DENY
+- If the user is disabled or offboarded → ALWAYS DENY
+- Do NOT treat active/inactive VPN connection state as an identity blocker
+- If the user belongs to a department, has a valid role, and is not disabled/offboarded, continue evaluating policy and audit context
 
 --------------------------------------------------
 
@@ -213,12 +216,12 @@ Rules:
 - Already has access → ACCEPT
 - Role/work-related but not in policy → ESCALATE
 - Clearly unrelated / invalid / unjustified → DENY
-- Inactive user → DENY
+- Disabled or offboarded user → DENY
 
 Respond ONLY with valid JSON:
 {
   "decision": "ACCEPT",
-  "identity_check": "Active user, engineering department, software_engineer role",
+  "identity_check": "User belongs to engineering, has software_engineer role, and is not disabled or offboarded",
   "policy_check": "VALID ACCESS. The requested VPN is approved for this department.",
   "audit_check": "TRUSTED. User has a clean history of approved requests.",
   "explanation": "The requested VPN is allowed by your department policy. Enjoy your access."
@@ -486,6 +489,23 @@ async def user_chat(
 
     requested_resource = intent_data.get("requested_resource", "unspecified")
     reason = intent_data.get("reason", "")
+    combined_request_text = f"{user_message} {requested_resource}".strip()
+
+    if "vpn" in combined_request_text.lower():
+        resolved_vpn_id, pools = await resolve_vpn_request(db, combined_request_text)
+        if not resolved_vpn_id:
+            available_vpns = ", ".join(pool.get("pool_id", "") for pool in pools) or "none"
+            response = (
+                f"❌ No relevant VPN is available for that request.\n\n"
+                f"Available VPNs: {available_vpns}"
+            )
+            return response, {
+                **intent_data,
+                "decision": "DENY",
+                "requested_resource": requested_resource,
+                "resolved_vpn": None,
+            }
+        requested_resource = resolved_vpn_id
 
     # --- Step 2: Refresh policy index for vector-based search ---
     await refresh_policy_index(db)

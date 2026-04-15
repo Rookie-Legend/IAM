@@ -3,6 +3,7 @@ from datetime import datetime
 from app.core.database import get_database
 from app.api.dependencies import get_current_admin
 from app.services.user_status import apply_user_status
+from app.services.vpn_catalog import resolve_vpn_request
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
@@ -118,11 +119,24 @@ async def approve_access_request(request_id: str, db=Depends(get_database), admi
     access_req = await db["access_requests"].find_one({"_id": ObjectId(request_id)})
     if not access_req:
         return {"status": "error", "message": "Access request not found"}
-    
-    await db["access_requests"].update_one({"_id": ObjectId(request_id)}, {"$set": {"status": "approved"}})
-    
+
     user_id = access_req.get("user_id")
     resource_type = access_req.get("resource_type")
+    if resource_type and "vpn" in resource_type.lower():
+        resolved_vpn_id, pools = await resolve_vpn_request(db, resource_type)
+        if not resolved_vpn_id:
+            available_vpns = ", ".join(pool.get("pool_id", "") for pool in pools) or "none"
+            return {
+                "status": "error",
+                "message": f"Requested VPN is not available. Available VPNs: {available_vpns}"
+            }
+        resource_type = resolved_vpn_id
+
+    await db["access_requests"].update_one(
+        {"_id": ObjectId(request_id)},
+        {"$set": {"status": "approved", "resource_type": resource_type}}
+    )
+
     if user_id and resource_type:
         state = await db["access_states"].find_one({"user_id": user_id})
         field = "vpn_access" if "vpn" in (resource_type or "") else "resources"
@@ -161,9 +175,9 @@ async def approve_access_request(request_id: str, db=Depends(get_database), admi
     await db["audit_logs"].insert_one({
         "user_id": admin.user_id,
         "action": "approve_access",
-        "target_resource": access_req.get("resource_type", "unknown") if access_req else request_id,
+        "target_resource": resource_type or request_id,
         "target_user": access_req.get("user_id", "") if access_req else "",
-        "details": f"Admin {admin.user_id} ({admin.role}) approved {access_req.get('resource_type', 'access')} request for user {access_req.get('user_id', '')}",
+        "details": f"Admin {admin.user_id} ({admin.role}) approved {resource_type or 'access'} request for user {access_req.get('user_id', '')}",
         "timestamp": datetime.utcnow()
     })
     return {"status": "success", "message": "Access request approved"}
