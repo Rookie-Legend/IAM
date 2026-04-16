@@ -1,12 +1,15 @@
 import json
 import uuid
+import random
+import string
 import httpx
-from datetime import datetime
+from datetime import datetime, timedelta
 from groq import Groq
 from app.core.config import settings
 from app.core.security import get_password_hash
 from app.api.vpn import revoke_vpn
 from app.rag.rag_engine import rag_answer
+from app.services.email_service import send_email
 
 _client = None
 
@@ -90,7 +93,8 @@ Available intents:
                   "why was X denied", "who has high risk", "explain this decision", "show logs for",
                   "detect fraud", "anomaly", "escalations", "multiple denials"
                   NOTE: Do NOT use rag_query for questions about policies themselves (use explain_policy or list_policies)
-- joiner:         onboard a new employee
+- joiner:         onboard a new employee by entering all their details directly into the system
+- invite_joiner:  send a registration invite email to a new joiner so they can self-register (use when user says "send invite", "email invite", "invite via email", "send registration link")
 - mover:          transfer employee to new dept/role
 - leaver:         offboard employee and revoke all access
 - disable:        temporarily disable a user account (keep account but block access)
@@ -128,6 +132,21 @@ Only accept department values from: engineering, finance, hr, sales, security.
         "role":       "exact role ONLY if explicitly stated by user, else null"
     },
     "missing_fields": ["list name, department, role, and/or email if they are truly absent — NEVER list user_id"],
+    "confidence": "HIGH/MEDIUM/LOW",
+    "message": "what you understood"
+}
+
+For invite_joiner — REQUIRED fields: email, role, department. The admin provides these and the system emails a registration link to the new joiner.
+NEVER guess or infer role from department. ONLY set role if the user explicitly stated it.
+Only accept department values from: engineering, finance, hr, sales, security.
+{
+    "intent": "invite_joiner",
+    "entities": {
+        "email":      "email ONLY if explicitly given by user, else null",
+        "department": "engineering/finance/hr/sales/security or null",
+        "role":       "exact role ONLY if explicitly stated by user, else null"
+    },
+    "missing_fields": ["email", "role", "department" — list whichever are absent],
     "confidence": "HIGH/MEDIUM/LOW",
     "message": "what you understood"
 }
@@ -291,7 +310,8 @@ async def generate_user_id(db, department: str) -> str:
 ADMIN_HELP_TEXT = (
     "IAM Admin Assistant — Available Commands\n\n"
     "Employee Lifecycle (JML)\n"
-    "- Join: Onboard a new employee. Provide name, department, and role.\n"
+    "- Join (Direct): Onboard a new employee immediately. Provide name, email, department, and role.\n"
+    "- Join (Invite): Send a registration invite email to a new joiner. Say 'send invite' or 'invite via email'.\n"
     "- Move: Transfer an employee to a new department or role. Provide user ID and target department.\n"
     "- Offboard: Deactivate a user and revoke all access. Provide user ID.\n"
     "- Disable: Temporarily suspend a user account. Provide user ID.\n"
@@ -345,8 +365,28 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
 
         dept_list_str = ", ".join(sorted(ALLOWED_DEPARTMENTS))
 
-        # ── Gate 1: Ask for name first, alone ──
+        # ── Gate 1: Show 2-option menu on fresh request; ask name after choice ──
         if not name:
+            _menu_shown = False
+            if isinstance(history, list):
+                join_start = 0
+                for i, h in enumerate(history):
+                    if isinstance(h, dict) and h.get("role") == "assistant" and "has been successfully onboarded!" in h.get("content", ""):
+                        join_start = i + 1
+                
+                history_slice = history[join_start:]
+                for _h in history_slice:
+                    if isinstance(_h, dict) and _h.get("role") == "assistant" and "Reply with **1** to onboard directly" in _h.get("content", ""):
+                        _menu_shown = True
+                        break
+            if not _menu_shown:
+                return (
+                    "To onboard a new joiner, how would you like to proceed?\n\n"
+                    "**1️⃣ Onboard directly** — Enter all details (name, email, department, role) and create the account immediately.\n"
+                    "**2️⃣ Send invite via email** — Provide email, department and role. The joiner receives a registration link to self-register.\n\n"
+                    "Reply with **1** to onboard directly, or **2** to send an invite email."
+                )
+            # Menu was shown and user chose 1 \u2014 now collect name
             return (
                 "Let's onboard a new employee.\n\n"
                 "Please provide the employee's **full name**."
@@ -465,6 +505,178 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             f"- **Email:** {email}\n"
             f"- **Temp Password:** `TempPass@123`\n\n"
             f"Welcome to the team, {name.split()[0]}! 🎉"
+        )
+
+    elif intent == "invite_joiner":
+        # ── State machine: email → department → role ──
+        # History is replayed using STRUCTURAL confirmation markers (not question text)
+        # to avoid fragile substring matches on markdown-formatted strings like **role**.
+
+        inv_email = None
+        inv_dept = None
+        inv_role = None
+        inv_last_asked = None
+
+        if isinstance(history, list):
+            # Find start of current invite session (restart after last completed invite)
+            inv_start = 0
+            for i, h in enumerate(history):
+                if isinstance(h, dict) and h.get("role") == "assistant" and "Invitation sent successfully" in h.get("content", ""):
+                    inv_start = i + 1
+            history_slice = history[inv_start:]
+            
+            # include the current message so the loop can extract the latest answer
+            if isinstance(intent_data, dict) and intent_data.get("current_message"):
+                history_slice = history_slice + [{"role": "user", "content": intent_data["current_message"]}]
+
+            for h in history_slice:
+                if not isinstance(h, dict):
+                    continue
+                role_h = h.get("role", "")
+                content_h = h.get("content", "")
+
+                if role_h == "assistant":
+                    # ── Extract already-confirmed values from bot confirmation lines ──
+                    if "Email address recorded:" in content_h:
+                        inv_email = content_h.split("Email address recorded:")[1].split("\n")[0].strip()
+                    if "Department recorded:" in content_h:
+                        inv_dept = content_h.split("Department recorded:")[1].split("\n")[0].strip()
+                    if "Role recorded:" in content_h:
+                        inv_role = content_h.split("Role recorded:")[1].split("\n")[0].strip()
+
+                    # ── Determine which field the bot was asking for ──
+                    # Use structural presence of confirmation lines, NOT the question text,
+                    # so markdown asterisks like **role** never cause a mismatch.
+                    if "invite email address" in content_h.lower():
+                        inv_last_asked = "email"
+                    elif "Email address recorded:" in content_h and "Department recorded:" not in content_h:
+                        # Bot confirmed email but not dept yet — it was asking for dept
+                        inv_last_asked = "department"
+                    elif "Department recorded:" in content_h and "Role recorded:" not in content_h:
+                        # Bot confirmed dept but not role yet — it was asking for role
+                        inv_last_asked = "role"
+
+                elif role_h == "user" and inv_last_asked:
+                    user_reply = content_h.strip()
+                    if inv_last_asked == "email" and not inv_email:
+                        inv_email = user_reply
+                    elif inv_last_asked == "department" and not inv_dept:
+                        inv_dept = user_reply.lower().strip()
+                    elif inv_last_asked == "role" and not inv_role:
+                        inv_role = user_reply
+
+        # Fallback: use LLM entities for first-turn single-shot inputs
+        if not inv_email and entities.get("email"):
+            inv_email = entities["email"]
+        if not inv_dept and entities.get("department"):
+            inv_dept = (entities["department"] or "").lower().strip()
+        if not inv_role and entities.get("role"):
+            inv_role = entities["role"]
+
+        dept_list_str = ", ".join(sorted(ALLOWED_DEPARTMENTS))
+
+        # ── Gate 1: Email ──
+        if not inv_email:
+            return (
+                "I'll send a registration invite email to the new joiner.\n\n"
+                "What is their **invite email address**?"
+            )
+
+        # ── Gate 2: Department ──
+        if not inv_dept:
+            return (
+                f"Email address recorded: {inv_email}\n\n"
+                f"Which **department** are they joining?\n"
+                f"Available: **{dept_list_str}**"
+            )
+
+        # ── Gate 3: Department allowlist check ──
+        if inv_dept not in ALLOWED_DEPARTMENTS:
+            return (
+                f"\u26a0\ufe0f **'{inv_dept}'** is not a registered department.\n\n"
+                f"Available departments: **{dept_list_str}**\n\n"
+                "Please choose one of the departments listed above."
+            )
+
+        # ── Gate 4: Role (with department-specific hints) ──
+        if not inv_role:
+            _dept_role_hints = {
+                "engineering": "e.g. software_engineer, devops_engineer, qa_engineer",
+                "finance":     "e.g. financial_analyst, accountant, finance_manager",
+                "hr":          "e.g. hr_manager, hr_executive, recruiter",
+                "sales":       "e.g. sales_executive, account_manager, sales_analyst",
+                "security":    "e.g. security_analyst, security_engineer, soc_lead",
+            }
+            _hint = _dept_role_hints.get(inv_dept, "e.g. analyst, manager, executive")
+            return (
+                f"Email address recorded: {inv_email}\n"
+                f"Department recorded: {inv_dept}\n\n"
+                f"What **role** will they be joining as?\n"
+                f"({_hint})"
+            )
+
+        # ── All fields collected — run invite logic ──
+        # Check if user already exists
+        existing_user = await db["users"].find_one({"email": inv_email})
+        if existing_user:
+            return (
+                f"⚠️ A user with email **{inv_email}** already exists in the system.\n\n"
+                "No invite was sent. If this is a different person, please use a different email address."
+            )
+
+        # Expire any existing pending invite for this email
+        existing_invite = await db["invites"].find_one({"email": inv_email, "status": "pending"})
+        if existing_invite:
+            await db["invites"].update_one({"email": inv_email}, {"$set": {"status": "expired"}})
+
+        # Generate invite token and store
+        token = ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+        invite_doc = {
+            "email": inv_email,
+            "role": inv_role,
+            "department": inv_dept,
+            "token": token,
+            "status": "pending",
+            "created_at": datetime.utcnow(),
+            "expires_at": datetime.utcnow() + timedelta(days=3),
+            "created_by": "admin"
+        }
+        await db["invites"].insert_one(invite_doc)
+
+        # Send email
+        login_link = f"{settings.FRONTEND_URL}/login?invite=true&token={token}"
+        try:
+            await send_email(
+                inv_email,
+                "Welcome to CorpOD - Complete Your Registration",
+                "invite_email.html",
+                {"ROLE": inv_role, "DEPARTMENT": inv_dept, "LOGIN_LINK": login_link}
+            )
+        except Exception as e:
+            # Rollback the invite if email fails
+            await db["invites"].delete_one({"token": token})
+            return (
+                f"❌ Failed to send invite email to **{inv_email}**.\n\n"
+                f"Error: {str(e)}\n\n"
+                "Please check the email configuration and try again."
+            )
+
+        # Audit log
+        await db["audit_logs"].insert_one({
+            "user_id": "admin",
+            "action": "invite",
+            "target_user": inv_email,
+            "details": f"Admin sent registration invite to {inv_email} for role {inv_role} in {inv_dept} department.",
+            "timestamp": datetime.utcnow()
+        })
+
+        return (
+            f"✅ **Invitation sent successfully!**\n\n"
+            f"- **To:** {inv_email}\n"
+            f"- **Role:** {inv_role}\n"
+            f"- **Department:** {inv_dept}\n"
+            f"- **Expires in:** 3 days\n\n"
+            f"The new joiner will receive a registration link at **{inv_email}** to complete their account setup. 📧"
         )
 
     elif intent == "mover":
@@ -1287,11 +1499,14 @@ async def _handle_general_query(entities: dict, db) -> str:
 
 async def admin_chat(user_message: str, history: list, db, user_role: str = "admin") -> tuple:
 
-    # ── Trim history at last completed policy to prevent LLM entity leakage ──
+    # ── Trim history at last completed policy/invite to prevent LLM entity leakage ──
     fresh_history = history
     if isinstance(history, list):
         for i, h in enumerate(history):
-            if isinstance(h, dict) and h.get("role") == "assistant" and "Policy created successfully" in h.get("content", ""):
+            if isinstance(h, dict) and h.get("role") == "assistant" and (
+                "Policy created successfully" in h.get("content", "") or
+                "Invitation sent successfully" in h.get("content", "")
+            ):
                 fresh_history = history[i + 1:]
 
     # ── Intent Lock: detect active multi-step policy creation ─────────────────
@@ -1310,6 +1525,78 @@ async def admin_chat(user_message: str, history: list, db, user_role: str = "adm
                 if any(q in last_bot for q in _POLICY_QUESTIONS):
                     _in_policy_form = True
                 break  # only check the most recent bot message
+
+    # ── Intent Lock: detect joiner onboarding menu waiting for choice ───────────
+    _JOINER_MENU_MARKER = "Reply with **1** to onboard directly, or **2** to send an invite email."
+    _in_joiner_menu = False
+    if isinstance(history, list):
+        for h in reversed(history):
+            if isinstance(h, dict) and h.get("role") == "assistant":
+                if _JOINER_MENU_MARKER in h.get("content", ""):
+                    _in_joiner_menu = True
+                break
+
+    if _in_joiner_menu:
+        msg_lower = user_message.lower().strip()
+        _ABORT_WORDS = ["cancel", "abort", "exit", "quit", "stop"]
+        if any(w in msg_lower for w in _ABORT_WORDS):
+            return "\u274c *Joiner onboarding cancelled.*", {"intent": "unknown", "entities": {}}
+        # Route: "2" / "invite" / "email" → invite_joiner; anything else → direct joiner
+        _INVITE_CHOICE = ["2", "two", "invite", "email", "send invite", "via email", "send email"]
+        if any(kw in msg_lower for kw in _INVITE_CHOICE):
+            _inv_data = {
+                "intent": "invite_joiner",
+                "entities": {},
+                "missing_fields": [],
+                "history": history,
+                "current_message": user_message,
+            }
+            _resp = await execute_admin_intent(_inv_data, db)
+            return _resp, _inv_data
+        else:
+            _joiner_data = {
+                "intent": "joiner",
+                "entities": {},
+                "missing_fields": [],
+                "history": history,
+                "current_message": user_message,
+            }
+            _resp = await execute_admin_intent(_joiner_data, db)
+            return _resp, _joiner_data
+
+    # ── Intent Lock: detect active invite form ────────────────────────────────
+    # Detect by checking whether the last bot message is still collecting invite fields.
+    # Markers are the structural confirmation lines written by the invite handler.
+    _INVITE_MARKERS = [
+        "invite email address",
+        "Email address recorded:",
+        "Department recorded:",
+    ]
+    _in_invite_form = False
+    if isinstance(history, list):
+        for h in reversed(history):
+            if isinstance(h, dict) and h.get("role") == "assistant":
+                last_bot_inv = h.get("content", "")
+                # Only lock if we haven't completed the invite yet
+                if any(m in last_bot_inv for m in _INVITE_MARKERS) and "Invitation sent successfully" not in last_bot_inv:
+                    _in_invite_form = True
+                break
+
+    if _in_invite_form:
+        msg_lower = user_message.lower().strip()
+        _ABORT_WORDS = ["cancel", "abort", "exit", "quit", "stop"]
+        if any(w in msg_lower for w in _ABORT_WORDS):
+            return "\u274c *Invite cancelled.*", {"intent": "unknown", "entities": {}}
+        # Stay in invite form — history replay in the handler rebuilds all state.
+        inv_intent_data = {
+            "intent": "invite_joiner",
+            "entities": {},
+            "missing_fields": [],
+            "history": history,
+            "current_message": user_message,
+        }
+        response = await execute_admin_intent(inv_intent_data, db)
+        return response, inv_intent_data
 
     if _in_policy_form:
         # Escape hatch: check if the user is asking a question OR trying to run a totally different command
@@ -1334,7 +1621,7 @@ async def admin_chat(user_message: str, history: list, db, user_role: str = "adm
                 answer = await execute_admin_intent(q_intent_data, db)
                 
                 # If it was an action intent, we fully abort the form creation
-                _ACTION_INTENTS = {"joiner", "mover", "leaver", "disable", "reinstate", "bulk_joiner", "bulk_leaver", "delete_policy", "update_policy"}
+                _ACTION_INTENTS = {"joiner", "mover", "leaver", "disable", "reinstate", "bulk_joiner", "bulk_leaver", "delete_policy", "update_policy", "invite_joiner"}
                 if q_intent in _ACTION_INTENTS or msg_lower in ("cancel", "abort", "exit", "quit", "stop"):
                     return answer + "\n\n❌ *Previous policy creation aborted.*", q_intent_data
                 else:

@@ -38,6 +38,6 @@ async def send_email(email: str, subject: str, template_name: str, replacements:
         )
         stdout, stderr = process.communicate(input=msg.as_bytes())
         if process.returncode != 0:
-            print(f"msmtp error: {stderr.decode()}")
+            raise Exception(f"msmtp error: {stderr.decode()}")
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        raise Exception(f"Failed to send email: {e}")

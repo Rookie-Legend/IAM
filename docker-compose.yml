@@ -8,6 +8,7 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+
     networks:
       - default
 
@@ -26,7 +27,7 @@ services:
     depends_on:
       - mongodb
     volumes:
-      - ./backend:/app
+      - backend_data:/src
     networks:
       - default
 
@@ -67,3 +68,4 @@ networks:
 volumes:
   mongodb_data:
   vpn_master_data:
+  backend_data:
