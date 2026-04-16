@@ -95,6 +95,9 @@ STRICTLY ALLOWED intents:
 - help          : asking for help, commands, menu, what can you do
 - query_self_access : user wants to know their own VPN, role, department, policy, or resources
 - access_request : user wants to REQUEST access to a VPN, resource, or application
+- general_query : factual questions about the portal, departments, or available VPNs
+                  e.g. "what is this portal?", "list departments", "what VPNs are available?"
+- dangerous_action : user attempts harmful operations e.g. "drop database", "delete all users"
 - out_of_scope  : anything NOT related to IAM access management
 
 For access_request, ALSO extract:
@@ -106,12 +109,18 @@ If needs_clarification is true, YOU MUST provide a specific, context-aware clari
 Example: "What is the specific purpose or task requiring access to vpn_eng?" 
 Do NOT ask generic questions. Ask specific questions based on what they already provided.
 
+For general_query, extract:
+- sub_type: departments | vpn | portal_info
+
 AVAILABLE VPN IDs for reference: vpn_eng, vpn_hr, vpn_fin, vpn_sec, vpn_admin
 
-Respond ONLY with valid JSON. No text outside JSON. Example:
+Respond ONLY with valid JSON. No text outside JSON. Examples:
 {"intent": "access_request", "requested_resource": "vpn_fin", "reason": "cross-team project", "needs_clarification": false}
 {"intent": "access_request", "requested_resource": "vpn_eng", "reason": null, "needs_clarification": true, "clarification_question": "What is the specific purpose or task requiring access to vpn_eng?"}
 {"intent": "query_self_access"}
+{"intent": "general_query", "sub_type": "departments"}
+{"intent": "general_query", "sub_type": "portal_info"}
+{"intent": "dangerous_action"}
 {"intent": "out_of_scope"}
 """
 
@@ -399,7 +408,7 @@ User Profile Information:
 """
 
 async def handle_simple_intent(
-    intent: str, user_message: str, current_user, db
+    intent: str, user_message: str, current_user, db, intent_data: dict = None
 ) -> str:
     """Handle greeting / help / query_self_access without going through the decision engine."""
 
@@ -432,6 +441,33 @@ async def handle_simple_intent(
 
     if intent == "out_of_scope":
         return "🚫 I can only assist with IAM-related access and information queries."
+
+    if intent == "dangerous_action":
+        return "🚫 Sorry, I cannot do that. Please contact the administrator directly."
+
+    if intent == "general_query":
+        sub_type = ((intent_data or {}).get("sub_type") or "").lower()
+        if sub_type == "departments":
+            return "Our organisation has the following departments: **Engineering, Finance, HR, Sales, Security**"
+        if sub_type == "vpn":
+            return (
+                "**Available VPN Profiles:**\n\n"
+                "- `vpn_eng` — Engineering\n"
+                "- `vpn_hr` — HR\n"
+                "- `vpn_fin` — Finance\n"
+                "- `vpn_sec` — Security\n"
+                "- `vpn_admin` — Admin\n\n"
+                "To request access, say: *I want access to vpn_eng*"
+            )
+        # portal_info or fallback
+        return (
+            "**🛡️ IAM Self-Service Portal**\n\n"
+            "This portal lets you:\n"
+            "- 🔐 **Request VPN access** — ask for any VPN profile\n"
+            "- 📊 **Check your access** — see what VPNs and resources you have\n"
+            "- 💬 **Ask questions** — about your profile, policies, or departments\n\n"
+            "Just tell me what you need!"
+        )
 
     # Default to greeting
     first = (
@@ -467,7 +503,7 @@ async def user_chat(
 
     # --- Short-circuit for non-access intents ---
     if intent != "access_request":
-        response = await handle_simple_intent(intent, user_message, current_user, db)
+        response = await handle_simple_intent(intent, user_message, current_user, db, intent_data)
         return response, intent_data
 
     # --- Needs clarification? ---
@@ -507,7 +543,18 @@ async def user_chat(
             }
         requested_resource = resolved_vpn_id
 
+    # --- Early exit: check if user already has this resource ---
+    existing_state = await db["access_states"].find_one({"user_id": current_user.user_id})
+    if existing_state:
+        field = "vpn_access" if "vpn" in (requested_resource or "").lower() else "resources"
+        if requested_resource and requested_resource in existing_state.get(field, []):
+            return (
+                f"✅ You already have access to **{requested_resource}**.\n\n"
+                "No further action is needed — you can connect using this VPN from your access portal."
+            ), {**intent_data, "decision": "ALREADY_GRANTED", "requested_resource": requested_resource}
+
     # --- Step 2: Refresh policy index for vector-based search ---
+
     await refresh_policy_index(db)
 
     # --- Step 3: fetch all 3 RAG contexts in parallel ---

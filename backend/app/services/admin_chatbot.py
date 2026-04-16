@@ -89,6 +89,7 @@ Available intents:
                   access logs analysis, risk levels, audit trail questions, "show suspicious users",
                   "why was X denied", "who has high risk", "explain this decision", "show logs for",
                   "detect fraud", "anomaly", "escalations", "multiple denials"
+                  NOTE: Do NOT use rag_query for questions about policies themselves (use explain_policy or list_policies)
 - joiner:         onboard a new employee
 - mover:          transfer employee to new dept/role
 - leaver:         offboard employee and revoke all access
@@ -100,9 +101,15 @@ Available intents:
 - query_audit:    search audit logs
 - query_permissions: check user permissions
 - create_policy:  create a new IAM policy
-- list_policies:  show/list all existing policies
+- list_policies:  show/list all existing policies, can be filtered by department/type/name
+- explain_policy: explain what a specific policy does (by name or ID)
 - delete_policy:  delete a policy by name or ID
 - update_policy:  update/edit an existing policy
+- general_query:  any factual question about the portal, departments, system stats, VPN pools, or
+                  "what is this portal?", "list all departments", "how many users?", "what VPNs exist?"
+                  Use this ONLY when no other specific intent matches.
+- dangerous_action: user attempts harmful/unauthorized operations such as:
+                  "drop database", "delete all users", "wipe data", "hack", "bypass security"
 - unknown:        cannot determine intent
 
 Always respond with valid JSON only. No text outside JSON.
@@ -134,11 +141,13 @@ For disable/reinstate/leaver:
     "message": "what you understood"
 }
 
-For mover:
+For mover — REQUIRED fields: user_id, department, role. ALL must be explicitly provided.
+NEVER guess or infer role. ONLY set role if the user explicitly stated it.
+Only accept department values from: engineering, finance, hr, sales, security.
 {
     "intent": "mover",
-    "entities": {"user_id": "U1001", "department": "finance", "role": "analyst"},
-    "missing_fields": ["user_id if missing", "department if missing"],
+    "entities": {"user_id": "U1001 or null", "department": "new department or null", "role": "new role ONLY if explicitly stated, else null"},
+    "missing_fields": ["user_id if missing", "department if missing", "role if missing"],
     "confidence": "HIGH",
     "message": "what you understood"
 }
@@ -192,8 +201,35 @@ You MUST read the chat history. If the bot previously said "Department recorded:
     "message": "what you understood"
 }
 
-For list_policies:
-{"intent": "list_policies", "entities": {"filter": "type/department/name or null", "value": "filter value or null"}, "confidence": "HIGH", "message": ""}
+For list_policies — extract department, type, or name filter if the user mentions one:
+{"intent": "list_policies", "entities": {"filter": "department OR type OR name — use exactly one of these strings as the key, or null if no filter", "value": "the filter value (e.g. hr, finance, access, jml) or null"}, "confidence": "HIGH", "message": ""}
+Examples:
+- "list hr policies" → {"filter": "department", "value": "hr"}
+- "show all access policies" → {"filter": "type", "value": "access"}
+- "list all policies" → {"filter": null, "value": null}
+
+For explain_policy — user wants to understand what a specific policy does:
+{"intent": "explain_policy", "entities": {"policy_id": "POL-XXXXXXXX or null", "name": "policy name if id not given, else null"}, "confidence": "HIGH", "message": ""}
+
+For general_query — factual questions about the portal, departments, users, stats, VPNs:
+{
+    "intent": "general_query",
+    "entities": {
+        "sub_type": "departments | users | stats | vpn | portal_info",
+        "filter": "department name or null (for user queries filtered by dept)"
+    },
+    "confidence": "HIGH",
+    "message": "what you understood"
+}
+Examples:
+- "List all departments" → sub_type: departments
+- "Show users in engineering" → sub_type: users, filter: engineering
+- "How many active users?" → sub_type: stats
+- "What VPNs are available?" → sub_type: vpn
+- "What is this portal?" → sub_type: portal_info
+
+For dangerous_action — harmful or unauthorized operations:
+{"intent": "dangerous_action", "entities": {}, "confidence": "HIGH", "message": "what the user tried"}
 
 For delete_policy:
 {"intent": "delete_policy", "entities": {"policy_id": "POL-XXXXXXXX or null", "name": "policy name if id not given"}, "missing_fields": [], "confidence": "HIGH", "message": ""}
@@ -432,22 +468,70 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         )
 
     elif intent == "mover":
-        user_id = entities.get("user_id")
-        new_dept = entities.get("department") or entities.get("new_department")
-        new_role = entities.get("role") or entities.get("new_role")
+        user_id = entities.get("user_id") or None
+        new_dept_raw = entities.get("department") or entities.get("new_department") or None
+        new_dept = new_dept_raw.lower().strip() if new_dept_raw else None
+        new_role = entities.get("role") or entities.get("new_role") or None
 
+        dept_list_str = ", ".join(sorted(ALLOWED_DEPARTMENTS))
+
+        # ── Gate 1: Ask for user_id ──
         if not user_id:
-            return "I need the **User ID** to move an employee. Please provide it (e.g. U1001)."
-        if not new_dept:
-            return "Which **department** should I move this employee to?"
+            return "I need the **User ID** of the employee to transfer. Please provide it (e.g. U1001)."
 
+        # ── Gate 2: Validate user exists ──
         user = await db["users"].find_one({"user_id": user_id})
         if not user:
             return f"❌ User **{user_id}** not found in the directory."
 
+        # ── Gate 3: Ask for new department ──
+        if not new_dept:
+            return (
+                f"Moving **{user.get('full_name', user_id)}** ({user_id}).\n\n"
+                f"Currently in: **{user.get('department', 'unknown')}** as **{user.get('role', 'unknown')}**\n\n"
+                f"Which **department** should they move to?\n"
+                f"Available departments: **{dept_list_str}**"
+            )
+
+        # ── Gate 4: Department allowlist check ──
+        if new_dept not in ALLOWED_DEPARTMENTS:
+            return (
+                f"⚠️ **'{new_dept_raw}'** is not a registered department in this system.\n\n"
+                f"Currently available departments: **{dept_list_str}**\n\n"
+                "Please choose one of the departments listed above, or contact the system administrator to add a new one."
+            )
+
+        # ── Gate 5: Same-department check ──
+        current_dept = (user.get("department") or "").lower().strip()
+        if new_dept == current_dept:
+            return (
+                f"⚠️ **{user.get('full_name', user_id)}** ({user_id}) is already in the **{current_dept}** department.\n\n"
+                "Please specify a different department to transfer them to."
+            )
+
+        # ── Gate 6: Ask for new role explicitly ──
+        if not new_role:
+            dept_role_hints = {
+                "engineering": "e.g. software_engineer, devops_engineer, qa_engineer",
+                "finance": "e.g. financial_analyst, accountant, finance_manager",
+                "hr": "e.g. hr_manager, hr_executive, recruiter",
+                "sales": "e.g. sales_executive, account_manager, sales_analyst",
+                "security": "e.g. security_analyst, security_engineer, soc_lead",
+            }
+            hint = dept_role_hints.get(new_dept, "e.g. analyst, manager, executive")
+            return (
+                f"Moving **{user.get('full_name', user_id)}** to **{new_dept}**.\n\n"
+                f"What will their **new role** be?\n"
+                f"({hint})"
+            )
+
+        # ── All checks passed — execute transfer ──
+        old_dept = user.get('department', 'unknown')
+        old_role = user.get('role', 'unknown')
+
         await db["users"].update_one(
             {"user_id": user_id},
-            {"$set": {"department": new_dept, "role": new_role or user.get("role", "software_engineer")}}
+            {"$set": {"department": new_dept, "role": new_role}}
         )
         await db["access_states"].update_one(
             {"user_id": user_id},
@@ -460,13 +544,11 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 "last_disconnected_at": datetime.utcnow()
             }}
         )
-        old_dept = user.get('department', 'unknown')
-        old_role = user.get('role', 'unknown')
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "mover",
             "target_user": user_id,
-            "details": f"{user.get('full_name', user_id)} ({user_id}) transferred from {old_dept} ({old_role}) to {new_dept} ({new_role or old_role}). VPN access revoked.",
+            "details": f"{user.get('full_name', user_id)} ({user_id}) transferred from {old_dept} ({old_role}) to {new_dept} ({new_role}). VPN access revoked.",
             "timestamp": datetime.utcnow()
         })
         try:
@@ -474,9 +556,9 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         except Exception:
             pass
         return (
-            f"✅ **{user_id}** has been successfully transferred!\n\n"
-            f"- **New Department:** {new_dept}\n"
-            f"- **New Role:** {new_role or user.get('role')}\n\n"
+            f"✅ **{user.get('full_name', user_id)}** has been successfully transferred!\n\n"
+            f"- **From:** {old_dept} ({old_role})\n"
+            f"- **To:** {new_dept} ({new_role})\n\n"
             f"⚠️ VPN access has been revoked. User must request access for the new department. 🔄"
         )
 
@@ -758,7 +840,15 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         last_asked = None  # which field did the bot most recently ask for?
 
         if isinstance(history, list):
-            for h in history:
+            # Find the start of the current policy creation session to avoid leaking past session state
+            start_idx = 0
+            for i, h in enumerate(history):
+                if isinstance(h, dict) and h.get("role") == "assistant" and "Policy created successfully" in h.get("content", ""):
+                    start_idx = i + 1
+                    
+            history_slice = history[start_idx:]
+
+            for h in history_slice:
                 if not isinstance(h, dict):
                     continue
                 role = h.get("role", "")
@@ -790,39 +880,136 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                             description = "__collected__"
 
                 elif role == "user" and last_asked:
-                    # The user's reply answers whatever was last asked
-                    user_reply = content.strip()
-                    if last_asked == "name" and not name:
-                        name = user_reply
-                    elif last_asked == "type" and not policy_type:
-                        for t in ["access", "jml", "mfa"]:
-                            if t in user_reply.lower():
-                                policy_type = t
-                                break
-                    elif last_asked == "department" and not department:
-                        department = user_reply
-                    elif last_asked == "description" and not description:
-                        description = user_reply
-                    elif last_asked == "vpn" and not vpn:
-                        vpn = user_reply.strip().split()[0]  # take first word e.g. "vpn_eng"
+                    # Skip if this past user message was a correction command,
+                    # not an actual answer to the field question.
+                    _HIST_CORRECTION_WORDS = [
+                        "change", "go back", "fix", "wrong", "incorrect",
+                        "redo", "edit", "no wait", "actually", "mistake", "re-enter",
+                    ]
+                    _HIST_FIELD_KEYWORDS = [
+                        "name", "type", "department", "dept",
+                        "description", "desc", "vpn",
+                    ]
+                    _reply_lower = content.strip().lower()
+                    _is_hist_correction = (
+                        any(w in _reply_lower for w in _HIST_CORRECTION_WORDS)
+                        and any(k in _reply_lower for k in _HIST_FIELD_KEYWORDS)
+                    )
+
+                    if not _is_hist_correction:
+                        # Normal reply — assign to the field that was last asked by the bot
+                        user_reply = content.strip()
+                        if last_asked == "name" and not name:
+                            name = user_reply
+                        elif last_asked == "type" and not policy_type:
+                            for t in ["access", "jml", "mfa"]:
+                                if t in user_reply.lower():
+                                    policy_type = t
+                                    break
+                        elif last_asked == "department" and not department:
+                            department = user_reply
+                        elif last_asked == "description" and not description:
+                            description = user_reply
+                        elif last_asked == "vpn" and not vpn:
+                            vpn = user_reply.strip().split()[0]
 
         # Also grab from LLM entities as fallback (only if not already set from history)
-        if not name:
+        # To prevent the LLM from hallucinating entities from previous, completed policies
+        # in the chat history, we only accept an entity if its value (or a close substring)
+        # actually appears in the current user message.
+        current_msg_lower = (intent_data.get("current_message") or "").lower()
+        
+        def is_entity_fresh(val):
+            if not val: 
+                return False
+            val_str = str(val).lower()
+            # Type and Department might be normalized by the LLM
+            if val_str in ("access", "jml", "mfa"):
+                return any(w in current_msg_lower for w in [val_str, "vpn", "joiner", "mover", "leaver", "multi"])
+            if val_str in ("engineering", "finance", "hr", "sales", "security"):
+                return any(w in current_msg_lower for w in [val_str[:3]]) # generic check for eng, fin, hr, sal, sec
+            return val_str in current_msg_lower
+
+        if not name and is_entity_fresh(entities.get("name")):
             name = entities.get("name")
-        if not policy_type:
+        if not policy_type and is_entity_fresh(entities.get("type")):
             policy_type = entities.get("type")
-        if not department:
+        if not department and is_entity_fresh(entities.get("department")):
             department = entities.get("department")
-        if not description:
+        if not description and is_entity_fresh(entities.get("description")):
             description = entities.get("description")
-        if not vpn:
+        if not vpn and is_entity_fresh(entities.get("vpn")):
             vpn = entities.get("vpn")
 
         # Resolve the placeholder
         if description == "__collected__":
-            description = None  # fall through to ask again if user message wasn't captured
+            description = None
+
+        # ── Correction handling: applied AFTER full history replay ──
+        # Detect if the current user message is trying to change a specific field.
+        import re as _re
+        current_msg = (intent_data.get("current_message") or "").strip()
+        if current_msg:
+            msg_lower = current_msg.lower()
+            _CORRECTION_WORDS = ["change", "go back", "fix", "wrong", "incorrect", "redo",
+                                  "edit", "no wait", "actually", "mistake", "re-enter", "previous", "update"]
+            _FIELD_MAP = {
+                "name":        ["policy name", "the name", "name"],
+                "type":        ["policy type", "the type", "type"],
+                "department":  ["department", "dept"],
+                "description": ["description", "desc"],
+                "vpn":         ["vpn profile", "vpn"],
+            }
+            
+            is_correction = any(w in msg_lower for w in _CORRECTION_WORDS)
+            
+            target_field = None
+            if is_correction:
+                for field, keywords in _FIELD_MAP.items():
+                    if any(kw in msg_lower for kw in keywords):
+                        target_field = field
+                        break
+            
+            is_generic_back = msg_lower in ["go back", "wait", "no wait", "wrong", "that's wrong", "mistake", "redo", "fix"]
+            
+            if target_field or is_generic_back:
+                # 1. Reverse the mistaken assignment from the history loop
+                # This ensures the bot actually re-asks for the current field instead of saving the correction text
+                if last_asked == "name" and name == current_msg: name = None
+                elif last_asked == "department" and department == current_msg: department = None
+                elif last_asked == "description" and description == current_msg: description = None
+                elif last_asked == "vpn" and vpn == current_msg.split()[0]: vpn = None
+
+                # 2. Apply the correction to the target field
+                if target_field:
+                    new_val_match = _re.search(
+                        r'(?:to|as|=)\s+["\']?(.+?)["\']?\s*$', current_msg, _re.IGNORECASE
+                    )
+                    new_val = new_val_match.group(1).strip() if new_val_match else None
+
+                    # Apply: set the target field to new_val (or clear it if new_val is not found)
+                    if target_field == "name":
+                        name = new_val if new_val else None
+                    elif target_field == "type":
+                        if new_val:
+                            policy_type = None
+                            for t in ["access", "jml", "mfa"]:
+                                if t in new_val.lower():
+                                    policy_type = t
+                                    break
+                        else:
+                            policy_type = None
+                    elif target_field == "department":
+                        department = new_val if new_val else None
+                    elif target_field == "description":
+                        description = new_val if new_val else None
+                    elif target_field == "vpn":
+                        vpn = new_val.split()[0] if new_val else None
 
         # Gate: ask ONE field at a time in order
+        # IMPORTANT: every gate response echoes ALL previously confirmed fields.
+        # This ensures corrections survive across turns — the latest bot message
+        # always carries the full authoritative state for history replay.
         if not name:
             return (
                 "Policy creation initiated. Please provide the required details one step at a time.\n\n"
@@ -841,18 +1028,25 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
 
         if not department:
             return (
+                f"Policy name recorded: {name}\n"
                 f"Policy type recorded: {policy_type}\n\n"
-                "Department: Which department does this policy apply to?"
+                "Department: Which department does this policy apply to?\n"
+                f"Available: {', '.join(sorted(ALLOWED_DEPARTMENTS))}"
             )
 
         if not description:
             return (
+                f"Policy name recorded: {name}\n"
+                f"Policy type recorded: {policy_type}\n"
                 f"Department recorded: {department}\n\n"
                 "Description: Provide a brief description of what this policy enforces."
             )
 
         if not vpn:
             return (
+                f"Policy name recorded: {name}\n"
+                f"Policy type recorded: {policy_type}\n"
+                f"Department recorded: {department}\n"
                 f"Description recorded.\n\n"
                 "VPN Profile: Specify the VPN profile identifier for this policy.\n"
                 "Common profiles: vpn_hr, vpn_fin, vpn_eng, vpn_sec, vpn_admin"
@@ -897,11 +1091,14 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         value = entities.get("value")
         query = {}
         if filter_by and value:
-            query[filter_by] = value
+            # Use case-insensitive regex so "HR", "hr", "Finance" all match
+            query[filter_by] = {"$regex": f"^{value}$", "$options": "i"}
         policies = await db["policies"].find(query).to_list(length=50)
         if not policies:
-            return "No policies found."
-        lines = [f"**{len(policies)} IAM Policies:**\n"]
+            filter_msg = f" for **{value}**" if value else ""
+            return f"No policies found{filter_msg}."
+        filter_label = f" (filtered by {filter_by}: {value})" if filter_by and value else ""
+        lines = [f"**{len(policies)} IAM Policies{filter_label}:**\n"]
         for p in policies:
             active_icon = "🟢" if p.get("is_active") else "🔴"
             lines.append(
@@ -909,6 +1106,39 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 f"| Type: {p.get('type', '-')} | Dept: {p.get('department', '-')} | VPN: {p.get('vpn', '-')}"
             )
         return "\n".join(lines)
+
+    elif intent == "explain_policy":
+        policy_id = entities.get("policy_id")
+        name_hint = entities.get("name")
+
+        policy = None
+        if policy_id:
+            policy = await db["policies"].find_one({"pol_id": policy_id})
+        if not policy and name_hint:
+            policy = await db["policies"].find_one({"name": {"$regex": name_hint, "$options": "i"}})
+
+        if not policy:
+            if name_hint or policy_id:
+                return f"❌ No policy found matching **'{name_hint or policy_id}'**. Please check the name or ID and try again."
+            return "Which policy would you like me to explain? Please provide the **policy name** or **Policy ID** (e.g. POL-XXXXXXXX)."
+
+        type_descriptions = {
+            "access": "controls VPN and resource access permissions for the department",
+            "jml": "governs Joiner, Mover, and Leaver workflows for employee lifecycle management",
+            "mfa": "enforces Multi-Factor Authentication requirements for users in the department",
+        }
+        type_desc = type_descriptions.get(policy.get("type", ""), "defines access rules")
+        status = "Active" if policy.get("is_active") else "Inactive"
+
+        return (
+            f"📋 **Policy Explanation — {policy.get('name', 'Unnamed')}**\n\n"
+            f"- **Policy ID:** {policy.get('pol_id', 'N/A')}\n"
+            f"- **Type:** {policy.get('type', '-')} — this policy {type_desc}\n"
+            f"- **Department:** {policy.get('department', '-')}\n"
+            f"- **VPN Profile:** {policy.get('vpn', '-')}\n"
+            f"- **Status:** {status}\n\n"
+            f"**Description:**\n{policy.get('description', 'No description provided.')}"
+        )
 
     elif intent == "delete_policy":
         policy_id = entities.get("policy_id")
@@ -970,15 +1200,101 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             f"- **Status:** {'Active' if updated.get('is_active') else 'Inactive'}"
         )
 
+    elif intent == "general_query":
+        return await _handle_general_query(entities, db)
+
+    elif intent == "dangerous_action":
+        return "🚫 Sorry, I cannot do that. Please contact the system administrator directly."
+
     else:
         return ADMIN_HELP_TEXT
 
 
+# ─── general_query handler (DB-backed factual answers) ───────────────────────
+async def _handle_general_query(entities: dict, db) -> str:
+    sub_type = (entities.get("sub_type") or "").lower()
+    dept_filter = entities.get("filter") or None
+
+    if sub_type == "departments":
+        dept_list = ", ".join(sorted(ALLOWED_DEPARTMENTS))
+        return f"**Registered Departments:**\n{dept_list}"
+
+    if sub_type == "users":
+        query = {}
+        if dept_filter:
+            query["department"] = {"$regex": f"^{dept_filter}$", "$options": "i"}
+        users = await db["users"].find(query, {"hashed_password": 0}).to_list(length=30)
+        if not users:
+            label = f" in **{dept_filter}**" if dept_filter else ""
+            return f"No users found{label}."
+        label = f" in **{dept_filter}**" if dept_filter else ""
+        lines = [f"**{len(users)} Users{label}:**\n"]
+        for u in users:
+            icon = "🟢" if u.get("status") == "active" else "🔴"
+            lines.append(
+                f"{icon} **{u.get('user_id')}** — {u.get('full_name', '-')} "
+                f"| {u.get('department', '-')} | {u.get('role', '-')} | {u.get('status', '-')}"
+            )
+        return "\n".join(lines)
+
+    if sub_type == "stats":
+        total = await db["users"].count_documents({})
+        active = await db["users"].count_documents({"status": "active"})
+        inactive = total - active
+        policies = await db["policies"].count_documents({})
+        return (
+            f"**📊 System Overview:**\n\n"
+            f"- Total Users: **{total}**\n"
+            f"- Active Users: **{active}**\n"
+            f"- Inactive Users: **{inactive}**\n"
+            f"- Total Policies: **{policies}**"
+        )
+
+    if sub_type == "vpn":
+        pools = await db["vpn_pools"].find({}).to_list(length=30)
+        if not pools:
+            return "No VPN pools configured."
+        lines = ["**Available VPN Pools:**\n"]
+        for p in pools:
+            lines.append(
+                f"- **{p.get('pool_id', '-')}** | Dept: {p.get('department', '-')} "
+                f"| Max connections: {p.get('max_connections', '-')}"
+            )
+        return "\n".join(lines)
+
+    if sub_type == "portal_info":
+        return (
+            "**🛡️ IAM — Identity and Access Management Portal**\n\n"
+            "This portal provides end-to-end employee lifecycle and access management:\n\n"
+            "- 👥 **Joiner / Mover / Leaver** — onboard, transfer, and offboard employees\n"
+            "- 🔐 **VPN Access Control** — request, grant, and revoke network access\n"
+            "- 📌 **Policy Management** — define and enforce access policies per department\n"
+            "- 📊 **Audit & Security** — monitor access events and detect anomalies\n\n"
+            "Admins manage the full system. Users self-serve for their own access needs."
+        )
+
+    # Fallback for unrecognised sub_type
+    return (
+        "I can answer questions about:\n"
+        "- **departments** — list registered departments\n"
+        "- **users** — show users (optionally filtered by department)\n"
+        "- **stats** — system overview\n"
+        "- **VPN pools** — available VPN profiles\n"
+        "- **portal info** — what this system does\n\n"
+        "What would you like to know?"
+    )
+
+
 async def admin_chat(user_message: str, history: list, db, user_role: str = "admin") -> tuple:
 
+    # ── Trim history at last completed policy to prevent LLM entity leakage ──
+    fresh_history = history
+    if isinstance(history, list):
+        for i, h in enumerate(history):
+            if isinstance(h, dict) and h.get("role") == "assistant" and "Policy created successfully" in h.get("content", ""):
+                fresh_history = history[i + 1:]
+
     # ── Intent Lock: detect active multi-step policy creation ─────────────────
-    # If the last bot message was a create_policy question, force the intent
-    # directly instead of letting the LLM reclassify the user's free-text reply.
     _POLICY_QUESTIONS = [
         "Policy Name: What should this policy be called",
         "Policy Type: Select one of the following",
@@ -996,14 +1312,49 @@ async def admin_chat(user_message: str, history: list, db, user_role: str = "adm
                 break  # only check the most recent bot message
 
     if _in_policy_form:
-        # Skip LLM extraction — user is answering a policy creation step
-        intent_data = {"intent": "create_policy", "entities": {}, "missing_fields": [], "history": history}
+        # Escape hatch: check if the user is asking a question OR trying to run a totally different command
+        msg_lower = user_message.lower().strip()
+        _QUESTION_INDICATORS = ["what", "how", "who", "which", "list", "show", "count",
+                                 "how many", "tell me", "explain", "?", "describe"]
+        _ACTION_INDICATORS = ["cancel", "abort", "exit", "quit", "stop",
+                              "create ", "delete ", "update ", "remove ", "onboard ", 
+                              "offboard ", "transfer ", "disable ", "reinstate ", "help"]
+        
+        _might_be_question = any(ind in msg_lower for ind in _QUESTION_INDICATORS)
+        _might_be_action = any(msg_lower.startswith(ind) or msg_lower == ind.strip() for ind in _ACTION_INDICATORS)
+
+        if _might_be_question or _might_be_action:
+            # Let the LLM classify this message using clean history
+            q_intent_data = await extract_admin_intent(user_message, fresh_history)
+            q_intent = q_intent_data.get("intent", "unknown")
+            
+            # If the LLM successfully classified it as a DIFFERENT defined intent:
+            if q_intent not in ("create_policy", "unknown"):
+                q_intent_data["history"] = history
+                answer = await execute_admin_intent(q_intent_data, db)
+                
+                # If it was an action intent, we fully abort the form creation
+                _ACTION_INTENTS = {"joiner", "mover", "leaver", "disable", "reinstate", "bulk_joiner", "bulk_leaver", "delete_policy", "update_policy"}
+                if q_intent in _ACTION_INTENTS or msg_lower in ("cancel", "abort", "exit", "quit", "stop"):
+                    return answer + "\n\n❌ *Previous policy creation aborted.*", q_intent_data
+                else:
+                    # It was a query/read-only intent — pause and resume the form
+                    return answer + "\n\n---\n📝 *Resuming policy creation — please answer the previous question to continue.*", q_intent_data
+
+        # Normal policy form path (user is just answering the form question)
+        intent_data = {
+            "intent": "create_policy",
+            "entities": {},
+            "missing_fields": [],
+            "history": history,
+            "current_message": user_message,
+        }
         response = await execute_admin_intent(intent_data, db)
         return response, intent_data
     # ─────────────────────────────────────────────────────────────────────────
 
-    intent_data = await extract_admin_intent(user_message, history)
-    intent_data["history"] = history  # make history available to execute_admin_intent
+    intent_data = await extract_admin_intent(user_message, fresh_history)
+    intent_data["history"] = history  # full history still goes to the state machine
     intent = intent_data.get("intent", "unknown")
 
     # Route RAG/fraud queries directly to the RAG engine unless user is HR
