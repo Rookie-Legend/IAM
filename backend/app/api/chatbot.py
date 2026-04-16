@@ -35,7 +35,7 @@ async def chat_query(request: ChatQueryRequest, db=Depends(get_database), curren
             msg_lower = request.query.lower()
             might_be_access = any(kw in msg_lower for kw in _ACCESS_KEYWORDS)
             if might_be_access:
-                user_intent = await extract_user_intent(request.query, request.history)
+                user_intent = await extract_user_intent(request.query, request.history, db)
                 if user_intent.get("intent") == "access_request":
                     response_text, _ = await user_chat(request.query, request.history, current_user, db)
                     return {"response": response_text}

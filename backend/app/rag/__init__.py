@@ -3,7 +3,7 @@ from app.rag.embeddings import embed_single, embed_texts, index_logs_to_db, inde
 from app.rag.vector_store import search_similar, search_similar_logs, cosine_similarity
 from app.rag.identity_context import fetch_identity_context
 from app.rag.policy_context import fetch_policy_context
-from app.rag.audit_context import fetch_audit_context
+from app.rag.audit_context import fetch_audit_context, was_recently_reinstated
 from app.rag.user_access_rag import user_access_rag_context, refresh_policy_index, get_similar_access_patterns
 
 __all__ = [
@@ -20,6 +20,7 @@ __all__ = [
     "fetch_identity_context",
     "fetch_policy_context",
     "fetch_audit_context",
+    "was_recently_reinstated",
     "user_access_rag_context",
     "refresh_policy_index",
     "get_similar_access_patterns",

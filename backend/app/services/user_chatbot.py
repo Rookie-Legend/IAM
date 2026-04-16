@@ -16,9 +16,9 @@ from groq import Groq
 from app.core.config import settings
 from app.rag.identity_context import fetch_identity_context
 from app.rag.policy_context import fetch_policy_context
-from app.rag.audit_context import fetch_audit_context
+from app.rag.audit_context import fetch_audit_context, was_recently_reinstated
 from app.rag.user_access_rag import refresh_policy_index
-from app.services.vpn_catalog import resolve_vpn_request
+from app.services.vpn_catalog import resolve_vpn_request, list_active_vpn_pools
 
 # --------------------------------------------------------------------------- #
 #  Groq client (singleton)
@@ -87,7 +87,7 @@ USER_HELP_TEXT = (
 #  STEP 1 — Intent extraction
 # --------------------------------------------------------------------------- #
 
-_INTENT_SYSTEM_PROMPT = """You are an IAM (Identity and Access Management) self-service gateway.
+_INTENT_SYSTEM_PROMPT_TEMPLATE = """You are an IAM (Identity and Access Management) self-service gateway.
 Your ONLY job is to classify the user's message intent and extract key entities.
 
 STRICTLY ALLOWED intents:
@@ -101,32 +101,53 @@ STRICTLY ALLOWED intents:
 - out_of_scope  : anything NOT related to IAM access management
 
 For access_request, ALSO extract:
-- requested_resource : the exact VPN id or resource name (e.g. vpn_fin, finance_db)
+- requested_resource : the exact VPN id or resource name the user asked for (e.g. vpn_fin, finance_db)
+                       IMPORTANT: map the user's words to one of the AVAILABLE VPN IDs listed below.
+                       e.g. "finance vpn" → vpn_fin, "engineering vpn" → vpn_eng, "hr vpn" → vpn_hr
 - reason             : the user's stated reason (or null if not given)
 - needs_clarification: true if resource name OR reason is completely missing
 
 If needs_clarification is true, YOU MUST provide a specific, context-aware clarification_question.
-Example: "What is the specific purpose or task requiring access to vpn_eng?" 
+Example: "What is the specific purpose or task requiring access to vpn_eng?"
 Do NOT ask generic questions. Ask specific questions based on what they already provided.
 
 For general_query, extract:
 - sub_type: departments | vpn | portal_info
 
-AVAILABLE VPN IDs for reference: vpn_eng, vpn_hr, vpn_fin, vpn_sec, vpn_admin
+AVAILABLE VPN IDs (from live database): {available_vpns}
 
 Respond ONLY with valid JSON. No text outside JSON. Examples:
-{"intent": "access_request", "requested_resource": "vpn_fin", "reason": "cross-team project", "needs_clarification": false}
-{"intent": "access_request", "requested_resource": "vpn_eng", "reason": null, "needs_clarification": true, "clarification_question": "What is the specific purpose or task requiring access to vpn_eng?"}
-{"intent": "query_self_access"}
-{"intent": "general_query", "sub_type": "departments"}
-{"intent": "general_query", "sub_type": "portal_info"}
-{"intent": "dangerous_action"}
-{"intent": "out_of_scope"}
+{{"intent": "access_request", "requested_resource": "vpn_fin", "reason": "cross-team project", "needs_clarification": false}}
+{{"intent": "access_request", "requested_resource": "vpn_eng", "reason": null, "needs_clarification": true, "clarification_question": "What is the specific purpose or task requiring access to vpn_eng?"}}
+{{"intent": "query_self_access"}}
+{{"intent": "general_query", "sub_type": "departments"}}
+{{"intent": "general_query", "sub_type": "portal_info"}}
+{{"intent": "dangerous_action"}}
+{{"intent": "out_of_scope"}}
 """
 
+# Fallback when DB is unavailable
+_INTENT_SYSTEM_PROMPT_FALLBACK = _INTENT_SYSTEM_PROMPT_TEMPLATE.format(
+    available_vpns="vpn_eng, vpn_hr, vpn_fin, vpn_sec, vpn_admin"
+)
 
-async def extract_user_intent(user_message: str, history: list) -> dict:
-    messages = [{"role": "system", "content": _INTENT_SYSTEM_PROMPT}]
+
+async def _build_intent_prompt(db) -> str:
+    """Build the intent system prompt with live VPN IDs from MongoDB."""
+    try:
+        pools = await list_active_vpn_pools(db)
+        if pools:
+            vpn_ids = ", ".join(p["pool_id"] for p in pools if p.get("pool_id"))
+            return _INTENT_SYSTEM_PROMPT_TEMPLATE.format(available_vpns=vpn_ids)
+    except Exception:
+        pass
+    return _INTENT_SYSTEM_PROMPT_FALLBACK
+
+
+
+async def extract_user_intent(user_message: str, history: list, db=None) -> dict:
+    intent_prompt = await _build_intent_prompt(db) if db is not None else _INTENT_SYSTEM_PROMPT_FALLBACK
+    messages = [{"role": "system", "content": intent_prompt}]
     valid_roles = {"system", "user", "assistant"}
     for h in history[-6:]:
         if isinstance(h, dict):
@@ -158,6 +179,13 @@ Using the three RAG context blocks below, decide whether the user's access reque
 - ACCEPT    : Identity valid + request matches policy + audit is TRUSTED/MODERATE
 - ESCALATE  : Identity valid + request is a contextually reasonable POLICY GAP
 - DENY      : Identity invalid/inactive OR POLICY VIOLATION OR high risk without ANY justification
+
+CRITICAL RULE — VPN NAMING:
+- The "Requested Resource" field tells you EXACTLY which VPN the user is asking for.
+- NEVER substitute, rename, or confuse it with a different VPN.
+- Your explanation must always name the exact requested VPN, not any other.
+- Use the "All Available VPNs in System" list in the policy context for reference only.
+- Use the "Allowed VPNs for this department" to decide if the request matches policy.
 
 Policy classification:
 - VALID ACCESS   : resource already allowed by the user's department policy
@@ -236,7 +264,7 @@ Respond ONLY with valid JSON:
   "explanation": "The requested VPN is allowed by your department policy. Enjoy your access."
 }
 
-Ensure "explanation" is a short 1-2 line simple summary. Do NOT mention RAG, "identity check", "policy check", or "audit check" in the explanation. Keep it extremely concise and user-friendly.
+Ensure "explanation" is a short 1-2 line simple summary. Do NOT mention RAG, "identity check", "policy check", or "audit check" in the explanation. Keep it extremely concise and user-friendly. Always refer to the exact VPN the user requested.
 
 Make sure to include a short ". why" explanation in your "policy_check" and "audit_check" fields to justify the classification.
 """
@@ -450,14 +478,16 @@ async def handle_simple_intent(
         if sub_type == "departments":
             return "Our organisation has the following departments: **Engineering, Finance, HR, Sales, Security**"
         if sub_type == "vpn":
+            # Fetch live VPN list from DB if possible — handled at call site,
+            # but we provide a good static fallback here
             return (
                 "**Available VPN Profiles:**\n\n"
-                "- `vpn_eng` — Engineering\n"
-                "- `vpn_hr` — HR\n"
-                "- `vpn_fin` — Finance\n"
-                "- `vpn_sec` — Security\n"
-                "- `vpn_admin` — Admin\n\n"
-                "To request access, say: *I want access to vpn_eng*"
+                "These are the VPNs available in the system. Use the exact ID when requesting access:\n\n"
+                "- `vpn_eng` — Engineering VPN\n"
+                "- `vpn_hr` — HR VPN\n"
+                "- `vpn_fin` — Finance VPN\n"
+                "- `vpn_sec` — Security VPN\n\n"
+                "To request access, say: *I want access to vpn_fin*"
             )
         # portal_info or fallback
         return (
@@ -497,8 +527,8 @@ async def user_chat(
     Main entrypoint called by the chatbot API router.
     Returns (response_text, intent_data).
     """
-    # --- Step 1: extract intent ---
-    intent_data = await extract_user_intent(user_message, history)
+    # --- Step 1: extract intent (pass db so prompt uses live VPN IDs) ---
+    intent_data = await extract_user_intent(user_message, history, db)
     intent = intent_data.get("intent", "out_of_scope")
 
     # --- Short-circuit for non-access intents ---
@@ -525,9 +555,38 @@ async def user_chat(
 
     requested_resource = intent_data.get("requested_resource", "unspecified")
     reason = intent_data.get("reason", "")
-    combined_request_text = f"{user_message} {requested_resource}".strip()
 
-    if "vpn" in combined_request_text.lower():
+    # --- Resolve VPN ID ---
+    # If the intent extractor already returned a valid pool ID, use it directly
+    # to avoid fuzzy matching confusion when the user answers a clarification.
+    if "vpn" in (requested_resource or "").lower():
+        # Check whether it's already a known pool ID to skip fuzzy resolution
+        all_pools = await list_active_vpn_pools(db)
+        known_pool_ids = {p["pool_id"] for p in all_pools if p.get("pool_id")}
+        if requested_resource in known_pool_ids:
+            # It's an exact pool ID — use it as-is, no fuzzy resolution needed
+            resolved_vpn_id = requested_resource
+        else:
+            # Fuzzy-resolve from the full user message + extracted resource
+            combined_request_text = f"{user_message} {requested_resource}".strip()
+            resolved_vpn_id, pools = await resolve_vpn_request(db, combined_request_text)
+            if not resolved_vpn_id:
+                available_vpns = ", ".join(pool.get("pool_id", "") for pool in pools) or "none"
+                response = (
+                    f"❌ No relevant VPN is available for that request.\n\n"
+                    f"Available VPNs: {available_vpns}"
+                )
+                return response, {
+                    **intent_data,
+                    "decision": "DENY",
+                    "requested_resource": requested_resource,
+                    "resolved_vpn": None,
+                }
+        requested_resource = resolved_vpn_id
+    elif "vpn" in user_message.lower():
+        # VPN mentioned in the message but not captured in requested_resource
+        combined_request_text = f"{user_message} {requested_resource}".strip()
+        all_pools = await list_active_vpn_pools(db)
         resolved_vpn_id, pools = await resolve_vpn_request(db, combined_request_text)
         if not resolved_vpn_id:
             available_vpns = ", ".join(pool.get("pool_id", "") for pool in pools) or "none"
@@ -571,6 +630,23 @@ async def user_chat(
         identity_ctx, policy_ctx, audit_ctx,
     )
     decision = result.get("decision", "DENY")
+
+    # --- Bug-1 guard: if user was recently reinstated after a disable,
+    #     never auto-ACCEPT — force ESCALATE so admin reviews the re-grant ---
+    if decision == "ACCEPT":
+        reinstated = await was_recently_reinstated(current_user.user_id, db)
+        if reinstated:
+            decision = "ESCALATE"
+            result["decision"] = "ESCALATE"
+            result["policy_check"] = (
+                result.get("policy_check", "") +
+                " [Override] Account was recently reinstated after a disable — "
+                "re-grant requires admin approval."
+            )
+            result["explanation"] = (
+                "Your account was recently reinstated. For security, your VPN access "
+                "request has been sent to an admin for approval."
+            )
 
     # --- Step 5: execute (DB mutations + audit log) ---
     await execute_decision(decision, requested_resource, reason, current_user, db, result)
