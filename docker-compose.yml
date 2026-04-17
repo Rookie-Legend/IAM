@@ -27,7 +27,8 @@ services:
     depends_on:
       - mongodb
     volumes:
-      - backend_data:/src
+      - backend_data:/src/data
+      - ./backend:/src
     networks:
       - default
 

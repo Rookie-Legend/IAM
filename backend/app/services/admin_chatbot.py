@@ -73,15 +73,20 @@ def _parse_json(raw: str) -> dict:
         return {"intent": "unknown", "entities": {}, "missing_fields": []}
 
 
-async def extract_admin_intent(user_message: str, history: list) -> dict:
-    system_prompt = """
+async def extract_admin_intent(user_message: str, history: list, forced_intent: str = None) -> dict:
+    forced_rule = ""
+    if forced_intent:
+        forced_rule = f"\nCRITICAL: The conversation is locked to the '{forced_intent}' intent. You MUST output intent='{forced_intent}' and extract all accumulated entities from the history and the latest message. DO NOT output 'unknown'.\n"
+
+    system_prompt = forced_rule + """
 You are an IAM system assistant. Extract the intent and entities from admin messages.
 
-CRITICAL — CONVERSATION CONTEXT:
+CRITICAL — CONVERSATION CONTEXT & CONTINUITY:
 - Always read the full conversation history.
-- If the previous assistant message asked for more details (e.g. "Missing: name, department. Can you provide them?"), treat the user's reply as a FOLLOW-UP for that SAME intent. Do NOT switch to greeting/help/unknown.
-- A lone ID like "U1001" or "u001" after a joiner/mover/leaver/disable/reinstate context means the user is supplying that entity. Continue the same intent.
-- NEVER classify a follow-up reply as "greeting" or "unknown" when there is clearly an active conversation.
+- If the previous assistant message asked for more details, treat the user's reply as a FOLLOW-UP for that SAME intent. Do NOT switch intents.
+- For multi-step forms (joiner, invite_joiner, mover, create_policy), you MUST preserve fields collected in previous turns!
+- If the chat history shows the bot already confirmed a value (e.g. "Got it — John Doe", "Invite email recorded: X", "Policy name recorded: Y"), you MUST output that exact value in your JSON entities. DO NOT DROP IT.
+- NEVER extract entities (like roles or departments) from the bot's own confirmation messages. Only extract what the user explicitly provided.
 - Only classify as "greeting" when it is the very first message and is a pure salutation with no task.
 - Only classify as "unknown" if there is truly no recognisable intent and no prior context.
 
@@ -184,18 +189,27 @@ For bulk operations:
     "message": "what you understood"
 }
 
-For queries:
+For queries (user lookup / info retrieval):
 {
     "intent": "query_users",
     "entities": {
-        "filter": "department/role/status filter or null",
-        "value":  "filter value or null"
+        "filter": "One of: name | user_id | username | department | role | status | null",
+        "value":  "The search value — e.g. 'Swaathi B', 'U1004', 'engineering', 'active' — or null",
+        "lookup": "What specific info the user wants about the matched user(s): user_id | department | role | status | null (null = just list the users)"
     },
     "confidence": "HIGH",
     "message": "what you understood"
 }
+Examples:
+- "give user id of Swaathi B"         -> filter: name,       value: "Swaathi B",   lookup: user_id
+- "what department is U1004 in"        -> filter: user_id,    value: "U1004",       lookup: department
+- "what is the role of swaathi b"      -> filter: name,       value: "Swaathi B",   lookup: role
+- "show all users in engineering"      -> filter: department, value: "engineering", lookup: null
+- "show active users"                  -> filter: status,     value: "active",      lookup: null
+- "what is the department of H1002"    -> filter: user_id,    value: "H1002",       lookup: department
+- "give department of swaathi"         -> filter: name,       value: "swaathi",     lookup: department
 
-Role mapping guide:
+Role mapping guide (ONLY apply if the user is answering a question about their role, or explicitly states their role. DO NOT map names to roles if the bot just asked for a name!):
 - "software engineer/developer/programmer" → software_engineer
 - "devops/sre/infrastructure" → devops_engineer
 - "finance/accountant/analyst" → financial_analyst
@@ -322,10 +336,12 @@ ADMIN_HELP_TEXT = (
     "Queries and Reports\n"
     "- Show all users: List all users, optionally filtered by department, role, or status.\n"
     "- Show recent audit logs: View the latest security audit events.\n"
-    "- Check permissions: View the active permissions for a specific user ID.\n\n"
+    "- Check permissions: View the active permissions for a specific user ID.\n"
+    "- General info: Ask factual questions about system stats, available VPNs, or departments.\n\n"
     "Policy Management\n"
     "- Create policy: Guided creation of a new IAM policy. You will be asked for name, type, department, description, and VPN profile.\n"
     "- Show all policies: List all existing IAM policies with their details.\n"
+    "- Explain policy: Understand what a specific policy does by providing its name or ID.\n"
     "- Delete policy: Remove a policy by its ID or name.\n"
     "- Update policy: Modify an existing policy. Provide the policy ID and the fields to update.\n\n"
     "Security and Fraud Detection (Admin only)\n"
@@ -371,12 +387,14 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             if isinstance(history, list):
                 join_start = 0
                 for i, h in enumerate(history):
-                    if isinstance(h, dict) and h.get("role") == "assistant" and "has been successfully onboarded!" in h.get("content", ""):
+                    _hc = h.get("text") or h.get("content") or ""
+                    if isinstance(h, dict) and h.get("role") in ("assistant", "bot") and "has been successfully onboarded!" in _hc:
                         join_start = i + 1
                 
                 history_slice = history[join_start:]
                 for _h in history_slice:
-                    if isinstance(_h, dict) and _h.get("role") == "assistant" and "Reply with **1** to onboard directly" in _h.get("content", ""):
+                    _hc2 = _h.get("text") or _h.get("content") or ""
+                    if isinstance(_h, dict) and _h.get("role") in ("assistant", "bot") and "Reply with **1** to onboard directly" in _hc2:
                         _menu_shown = True
                         break
             if not _menu_shown:
@@ -521,7 +539,8 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             # Find start of current invite session (restart after last completed invite)
             inv_start = 0
             for i, h in enumerate(history):
-                if isinstance(h, dict) and h.get("role") == "assistant" and "Invitation sent successfully" in h.get("content", ""):
+                _ic = h.get("text") or h.get("content") or ""
+                if isinstance(h, dict) and h.get("role") in ("assistant", "bot") and "Invitation sent successfully" in _ic:
                     inv_start = i + 1
             history_slice = history[inv_start:]
             
@@ -533,30 +552,32 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 if not isinstance(h, dict):
                     continue
                 role_h = h.get("role", "")
-                content_h = h.get("content", "")
+                content_h = h.get("text") or h.get("content") or ""
 
-                if role_h == "assistant":
+                if role_h in ("assistant", "bot"):
                     # ── Extract already-confirmed values from bot confirmation lines ──
-                    if "Email address recorded:" in content_h:
-                        inv_email = content_h.split("Email address recorded:")[1].split("\n")[0].strip()
-                    if "Department recorded:" in content_h:
-                        inv_dept = content_h.split("Department recorded:")[1].split("\n")[0].strip()
-                    if "Role recorded:" in content_h:
-                        inv_role = content_h.split("Role recorded:")[1].split("\n")[0].strip()
+                    # NOTE: use "Invite "-prefixed markers to avoid matching the policy wizard's
+                    # "Policy department recorded:" (which would contain "Department recorded:" as a substring).
+                    if "Invite email recorded:" in content_h:
+                        inv_email = content_h.split("Invite email recorded:")[1].split("\n")[0].strip()
+                    if "Invite department recorded:" in content_h:
+                        inv_dept = content_h.split("Invite department recorded:")[1].split("\n")[0].strip()
+                    if "Invite role recorded:" in content_h:
+                        inv_role = content_h.split("Invite role recorded:")[1].split("\n")[0].strip()
 
                     # ── Determine which field the bot was asking for ──
                     # Use structural presence of confirmation lines, NOT the question text,
                     # so markdown asterisks like **role** never cause a mismatch.
                     if "invite email address" in content_h.lower():
                         inv_last_asked = "email"
-                    elif "Email address recorded:" in content_h and "Department recorded:" not in content_h:
+                    elif "Invite email recorded:" in content_h and "Invite department recorded:" not in content_h:
                         # Bot confirmed email but not dept yet — it was asking for dept
                         inv_last_asked = "department"
-                    elif "Department recorded:" in content_h and "Role recorded:" not in content_h:
+                    elif "Invite department recorded:" in content_h and "Invite role recorded:" not in content_h:
                         # Bot confirmed dept but not role yet — it was asking for role
                         inv_last_asked = "role"
 
-                elif role_h == "user" and inv_last_asked:
+                elif role_h in ("user",) and inv_last_asked:
                     user_reply = content_h.strip()
                     if inv_last_asked == "email" and not inv_email:
                         inv_email = user_reply
@@ -585,7 +606,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         # ── Gate 2: Department ──
         if not inv_dept:
             return (
-                f"Email address recorded: {inv_email}\n\n"
+                f"Invite email recorded: {inv_email}\n\n"
                 f"Which **department** are they joining?\n"
                 f"Available: **{dept_list_str}**"
             )
@@ -593,6 +614,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         # ── Gate 3: Department allowlist check ──
         if inv_dept not in ALLOWED_DEPARTMENTS:
             return (
+                f"Invite email recorded: {inv_email}\n\n"
                 f"\u26a0\ufe0f **'{inv_dept}'** is not a registered department.\n\n"
                 f"Available departments: **{dept_list_str}**\n\n"
                 "Please choose one of the departments listed above."
@@ -609,8 +631,8 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             }
             _hint = _dept_role_hints.get(inv_dept, "e.g. analyst, manager, executive")
             return (
-                f"Email address recorded: {inv_email}\n"
-                f"Department recorded: {inv_dept}\n\n"
+                f"Invite email recorded: {inv_email}\n"
+                f"Invite department recorded: {inv_dept}\n\n"
                 f"What **role** will they be joining as?\n"
                 f"({_hint})"
             )
@@ -972,19 +994,110 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         )
 
     elif intent == "query_users":
-        filter_by = entities.get("filter")
-        value = entities.get("value")
+        filter_by = (entities.get("filter") or "").lower().strip()
+        value = (entities.get("value") or "").strip()
+        lookup = (entities.get("lookup") or "").lower().strip()
 
+        # ── Build MongoDB query with case-insensitive regex ──
         query = {}
         if filter_by and value:
-            query[filter_by] = value
+            if filter_by == "name":
+                # Match anywhere in full_name, case-insensitive
+                query["full_name"] = {"$regex": value, "$options": "i"}
+            elif filter_by == "user_id":
+                query["user_id"] = {"$regex": f"^{value}$", "$options": "i"}
+            elif filter_by == "username":
+                query["username"] = {"$regex": f"^{value}$", "$options": "i"}
+            elif filter_by == "department":
+                query["department"] = {"$regex": f"^{value}$", "$options": "i"}
+            elif filter_by == "role":
+                query["role"] = {"$regex": value, "$options": "i"}
+            elif filter_by == "status":
+                query["status"] = {"$regex": f"^{value}$", "$options": "i"}
+            else:
+                # Fallback for any other field — still use regex for safety
+                query[filter_by] = {"$regex": value, "$options": "i"}
 
-        users = await db["users"].find(query, {"hashed_password": 0}).to_list(length=10)
+        users = await db["users"].find(query, {"hashed_password": 0}).to_list(length=50)
 
         if not users:
-            return "No users found matching your criteria."
+            search_label = f" matching **{value}**" if value else ""
+            return f"❌ No users found{search_label}. Please check the name, ID, or filter and try again."
 
-        lines = [f"**Found {len(users)} users:**\n"]
+        # ── Answer specific lookup questions directly ──
+        if lookup == "user_id":
+            if len(users) == 1:
+                u = users[0]
+                return (
+                    f"The User ID for **{u.get('full_name', value)}** is: **{u.get('user_id', 'N/A')}**\n"
+                    f"- Department: {u.get('department', '-')} | Role: {u.get('role', '-')} | Status: {u.get('status', '-')}"
+                )
+            else:
+                lines = [f"Found **{len(users)}** user(s) named **{value}**. Here are their User IDs:\n"]
+                for u in users:
+                    status_icon = "🟢" if u.get("status") == "active" else "🔴"
+                    lines.append(
+                        f"{status_icon} **{u.get('user_id', 'N/A')}** — {u.get('full_name', '-')} "
+                        f"| {u.get('department', '-')} | {u.get('role', '-')} | {u.get('status', '-')}"
+                    )
+                return "\n".join(lines)
+
+        if lookup == "department":
+            if len(users) == 1:
+                u = users[0]
+                return (
+                    f"**{u.get('full_name', value)}** ({u.get('user_id', 'N/A')}) is in the "
+                    f"**{u.get('department', 'N/A')}** department.\n"
+                    f"- Role: {u.get('role', '-')} | Status: {u.get('status', '-')}"
+                )
+            else:
+                lines = [f"Found **{len(users)}** user(s) matching **{value}**:\n"]
+                for u in users:
+                    lines.append(
+                        f"- **{u.get('user_id', 'N/A')}** — {u.get('full_name', '-')} → "
+                        f"Department: **{u.get('department', '-')}** | Role: {u.get('role', '-')}"
+                    )
+                return "\n".join(lines)
+
+        if lookup == "role":
+            if len(users) == 1:
+                u = users[0]
+                return (
+                    f"**{u.get('full_name', value)}** ({u.get('user_id', 'N/A')}) has the role: "
+                    f"**{u.get('role', 'N/A')}**\n"
+                    f"- Department: {u.get('department', '-')} | Status: {u.get('status', '-')}"
+                )
+            else:
+                lines = [f"Found **{len(users)}** user(s) matching **{value}**:\n"]
+                for u in users:
+                    lines.append(
+                        f"- **{u.get('user_id', 'N/A')}** — {u.get('full_name', '-')} → "
+                        f"Role: **{u.get('role', '-')}** | Dept: {u.get('department', '-')}"
+                    )
+                return "\n".join(lines)
+
+        if lookup == "status":
+            if len(users) == 1:
+                u = users[0]
+                icon = "🟢" if u.get("status") == "active" else "🔴"
+                return (
+                    f"{icon} **{u.get('full_name', value)}** ({u.get('user_id', 'N/A')}) is currently "
+                    f"**{u.get('status', 'N/A')}**.\n"
+                    f"- Department: {u.get('department', '-')} | Role: {u.get('role', '-')}"
+                )
+            else:
+                lines = [f"Found **{len(users)}** user(s) matching **{value}**:\n"]
+                for u in users:
+                    icon = "🟢" if u.get("status") == "active" else "🔴"
+                    lines.append(
+                        f"{icon} **{u.get('user_id', 'N/A')}** — {u.get('full_name', '-')} → "
+                        f"Status: **{u.get('status', '-')}** | Dept: {u.get('department', '-')}"
+                    )
+                return "\n".join(lines)
+
+        # ── Default: full listing ──
+        filter_label = f" matching **{value}**" if value else ""
+        lines = [f"**Found {len(users)} user(s){filter_label}:**\n"]
         for u in users:
             status_icon = "🟢" if u.get("status") == "active" else "🔴"
             lines.append(
@@ -1026,16 +1139,46 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         if not user_id:
             return "Which user's permissions would you like to check? Provide the User ID."
 
+        # Support querying by username as well (e.g., "admin")
+        target_user = await db["users"].find_one({
+            "$or": [{"user_id": user_id}, {"username": user_id.lower()}]
+        })
+        resolved_user_id = target_user["user_id"] if target_user else user_id
+
         perms = await db["permissions"].find(
-            {"user_id": user_id, "granted": True}
+            {"user_id": resolved_user_id, "granted": True}
         ).to_list(length=None)
 
-        if not perms:
+        state = await db["access_states"].find_one({"user_id": resolved_user_id})
+
+        if not perms and (not state or not state.get("vpn_access")):
             return f"**{user_id}** has no active permissions."
 
-        lines = [f"**Active permissions for {user_id}:**\n"]
-        for p in perms:
-            lines.append(f"✅ {p.get('resource', 'unknown')}")
+        display_name = target_user.get('full_name', resolved_user_id) if target_user else user_id
+        lines = [f"**Active permissions for {display_name} ({resolved_user_id}):**\n"]
+        
+        if perms:
+            for p in perms:
+                lines.append(f"✅ {p.get('resource', 'unknown')}")
+
+        if state and state.get("vpn_access"):
+            if perms:
+                lines.append("")
+            lines.append("**VPN Access Profiles:**")
+            active_vpn = state.get("provisioned_vpn")
+            
+            vpn_map = {
+                "vpn_eng": "Engineering VPN",
+                "vpn_fin": "Finance VPN",
+                "vpn_hr": "HR VPN",
+                "vpn_sec": "Security VPN"
+            }
+            for v_id in state["vpn_access"]:
+                v_name = vpn_map.get(v_id, f"VPN Profile {v_id}")
+                if v_id == active_vpn:
+                    lines.append(f"✅ **{v_name}** (Active)")
+                else:
+                    lines.append(f"🔄 **{v_name}** (Can be switched)")
 
         return "\n".join(lines)
 
@@ -1055,18 +1198,25 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             # Find the start of the current policy creation session to avoid leaking past session state
             start_idx = 0
             for i, h in enumerate(history):
-                if isinstance(h, dict) and h.get("role") == "assistant" and "Policy created successfully" in h.get("content", ""):
+                _pc = h.get("text") or h.get("content") or ""
+                if isinstance(h, dict) and h.get("role") in ("assistant", "bot") and "Policy created successfully" in _pc:
                     start_idx = i + 1
-                    
+
             history_slice = history[start_idx:]
+
+            # FIX 1: Always append the current user message so the loop can assign
+            # it to the field that was last asked — even when the frontend sends
+            # history *without* the in-flight user reply.
+            if intent_data.get("current_message"):
+                history_slice = history_slice + [{"role": "user", "content": intent_data["current_message"]}]
 
             for h in history_slice:
                 if not isinstance(h, dict):
                     continue
                 role = h.get("role", "")
-                content = h.get("content", "")
+                content = h.get("text") or h.get("content") or ""
 
-                if role == "assistant":
+                if role in ("assistant", "bot"):
                     # Track what field the bot most recently asked
                     if "Policy Name:" in content and "What should this policy be called" in content:
                         last_asked = "name"
@@ -1084,14 +1234,14 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                         name = content.split("Policy name recorded:")[1].split("\n")[0].strip()
                     if "Policy type recorded:" in content:
                         policy_type = content.split("Policy type recorded:")[1].split("\n")[0].strip()
-                    if "Department recorded:" in content:
-                        department = content.split("Department recorded:")[1].split("\n")[0].strip()
+                    if "Policy department recorded:" in content:
+                        department = content.split("Policy department recorded:")[1].split("\n")[0].strip()
                     if "Description recorded." in content:
                         # Only set placeholder if description hasn't been captured from a user reply yet
                         if not description:
                             description = "__collected__"
 
-                elif role == "user" and last_asked:
+                elif role in ("user",) and last_asked:
                     # Skip if this past user message was a correction command,
                     # not an actual answer to the field question.
                     _HIST_CORRECTION_WORDS = [
@@ -1153,9 +1303,14 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         if not vpn and is_entity_fresh(entities.get("vpn")):
             vpn = entities.get("vpn")
 
-        # Resolve the placeholder
-        if description == "__collected__":
-            description = None
+        # FIX 2: "__collected__" is a truthy sentinel meaning description WAS already
+        # captured in a previous turn (the VPN prompt echoes "Description recorded."
+        # instead of the raw text).  Do NOT reset it to None — leave it truthy so
+        # the description gate never re-fires and the VPN gate runs next.
+        # The sentinel is only replaced with a real value when we find the actual
+        # user reply in the history loop above; if the reply is missing from history
+        # the sentinel still keeps the gate closed so we don't loop forever.
+        # (We keep the string as-is; vpn gate and creation block both ignore it.)
 
         # ── Correction handling: applied AFTER full history replay ──
         # Detect if the current user message is trying to change a specific field.
@@ -1250,7 +1405,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             return (
                 f"Policy name recorded: {name}\n"
                 f"Policy type recorded: {policy_type}\n"
-                f"Department recorded: {department}\n\n"
+                f"Policy department recorded: {department}\n\n"
                 "Description: Provide a brief description of what this policy enforces."
             )
 
@@ -1258,7 +1413,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             return (
                 f"Policy name recorded: {name}\n"
                 f"Policy type recorded: {policy_type}\n"
-                f"Department recorded: {department}\n"
+                f"Policy department recorded: {department}\n"
                 f"Description recorded.\n\n"
                 "VPN Profile: Specify the VPN profile identifier for this policy.\n"
                 "Common profiles: vpn_hr, vpn_fin, vpn_eng, vpn_sec, vpn_admin"
@@ -1375,41 +1530,194 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         return f"✅ Policy **{policy.get('name', policy_id)}** ({policy_id}) has been deleted."
 
     elif intent == "update_policy":
-        policy_id = entities.get("policy_id")
-        name_hint = entities.get("name")
-        if not policy_id and name_hint:
-            found = await db["policies"].find_one({"name": {"$regex": name_hint, "$options": "i"}})
-            if found:
-                policy_id = found["pol_id"]
-        if not policy_id:
+        # ── Multi-step stateful update form ──────────────────────────────────────
+        # Structural markers used in bot messages:
+        #   "Update policy recorded: {pol_id}"  → policy identified; asking which field
+        #   "Update field recorded: {field}"    → field selected; asking for new value
+        # These are parsed directly from history to avoid LLM re-classification.
+
+        _upd_pol_id = None
+        _upd_field  = None
+        _upd_new_val = None
+        _last_upd_asked = None   # "policy_id" | "field" | "value"
+
+        _upd_hist = history if isinstance(history, list) else []
+        # Find start of current update session (reset after last successful update)
+        _upd_start = 0
+        for _ui, _uh in enumerate(_upd_hist):
+            _uhc = _uh.get("text") or _uh.get("content") or "" if isinstance(_uh, dict) else ""
+            if isinstance(_uh, dict) and _uh.get("role") in ("assistant", "bot") and "Policy updated successfully!" in _uhc:
+                _upd_start = _ui + 1
+        _upd_slice = _upd_hist[_upd_start:]
+
+        # Append current message so the loop can capture the user's latest reply
+        _cur_msg = intent_data.get("current_message", "") if isinstance(intent_data, dict) else ""
+        if _cur_msg:
+            _upd_slice = _upd_slice + [{"role": "user", "content": _cur_msg}]
+
+        for _uh in _upd_slice:
+            if not isinstance(_uh, dict):
+                continue
+            _role_u = _uh.get("role", "")
+            _cont_u = _uh.get("text") or _uh.get("content") or ""
+
+            if _role_u in ("assistant", "bot"):
+                # Extract confirmed values from structural markers
+                if "Update policy recorded:" in _cont_u:
+                    _upd_pol_id = _cont_u.split("Update policy recorded:")[1].split("\n")[0].strip()
+                if "Update field recorded:" in _cont_u:
+                    _upd_field = _cont_u.split("Update field recorded:")[1].split("\n")[0].strip()
+                # Detect what the bot was last asking for
+                if "policy name to update" in _cont_u or ("Policy ID" in _cont_u and "Update policy recorded:" not in _cont_u):
+                    _last_upd_asked = "policy_id"
+                elif "Update policy recorded:" in _cont_u and "Update field recorded:" not in _cont_u:
+                    _last_upd_asked = "field"
+                elif "Update field recorded:" in _cont_u:
+                    _last_upd_asked = "value"
+
+            elif _role_u == "user" and _last_upd_asked:
+                _reply = _cont_u.strip()
+                if _last_upd_asked == "policy_id" and not _upd_pol_id:
+                    _upd_pol_id = _reply
+                elif _last_upd_asked == "field" and not _upd_field:
+                    _upd_field = _reply
+                elif _last_upd_asked == "value" and not _upd_new_val:
+                    _upd_new_val = _reply
+
+        # Fallback: try LLM-extracted entities for initial single-shot invocation
+        if not _upd_pol_id:
+            _pid = entities.get("policy_id")
+            if _pid:
+                _upd_pol_id = _pid
+            elif entities.get("name"):
+                _pf = await db["policies"].find_one({"name": {"$regex": entities["name"], "$options": "i"}})
+                if _pf:
+                    _upd_pol_id = _pf["pol_id"]
+
+        # ── Gate 1: Need policy ID ──
+        if not _upd_pol_id:
             return "Please provide the **Policy ID** (e.g. POL-XXXXXXXX) or policy name to update."
-        existing = await db["policies"].find_one({"pol_id": policy_id})
-        if not existing:
-            return f"❌ Policy **{policy_id}** not found."
-        updates = {"updated_on": datetime.utcnow()}
-        for field in ("name", "type", "description", "department", "vpn", "is_active"):
-            val = entities.get(field)
-            if val is not None:
-                if field == "type" and val not in ("jml", "access", "mfa"):
-                    continue
-                updates[field] = val
-        await db["policies"].update_one({"pol_id": policy_id}, {"$set": updates})
+
+        # Validate policy exists (try ID first, then name fallback)
+        _existing = await db["policies"].find_one({"pol_id": _upd_pol_id})
+        if not _existing:
+            _existing = await db["policies"].find_one({"name": {"$regex": _upd_pol_id, "$options": "i"}})
+            if _existing:
+                _upd_pol_id = _existing["pol_id"]
+            else:
+                return f"❌ Policy **{_upd_pol_id}** not found. Please check the Policy ID or name."
+
+        # ── Gate 2: Need field selection ──
+        if not _upd_field:
+            _status_str = "Active" if _existing.get("is_active") else "Inactive"
+            return (
+                f"Update policy recorded: {_upd_pol_id}\n\n"
+                f"📋 **Current Policy: {_existing.get('name', 'Unnamed')}**\n"
+                f"- **Policy ID:** {_upd_pol_id}\n"
+                f"- **Name:** {_existing.get('name', '-')}\n"
+                f"- **Type:** {_existing.get('type', '-')}\n"
+                f"- **Department:** {_existing.get('department', '-')}\n"
+                f"- **VPN Profile:** {_existing.get('vpn', '-')}\n"
+                f"- **Description:** {_existing.get('description', 'None')}\n"
+                f"- **Status:** {_status_str}\n\n"
+                f"Which field would you like to update?\n"
+                f"1. Name\n"
+                f"2. Type `(jml / access / mfa)`\n"
+                f"3. Department\n"
+                f"4. VPN Profile\n"
+                f"5. Description\n"
+                f"6. Status `(active / inactive)`\n\n"
+                f"Reply with the **field number** or **field name**."
+            )
+
+        # Normalise field selection
+        _FIELD_MAP = {
+            "1": "name",        "name": "name",
+            "2": "type",        "type": "type",
+            "3": "department",  "department": "department", "dept": "department",
+            "4": "vpn",         "vpn": "vpn",  "vpn profile": "vpn",
+            "5": "description", "description": "description", "desc": "description",
+            "6": "status",      "status": "status",
+        }
+        _upd_field_norm = _FIELD_MAP.get(_upd_field.lower().strip())
+        if not _upd_field_norm:
+            return (
+                f"Update policy recorded: {_upd_pol_id}\n\n"
+                f"⚠️ **'{_upd_field}'** is not a valid field.\n\n"
+                f"Please choose from:\n"
+                f"1. Name\n2. Type\n3. Department\n4. VPN Profile\n5. Description\n6. Status"
+            )
+
+        # ── Gate 3: Need new value ──
+        if not _upd_new_val:
+            _cur_val = _existing.get(_upd_field_norm) if _upd_field_norm != "status" else (
+                "Active" if _existing.get("is_active") else "Inactive"
+            )
+            _hints = {
+                "name":        "Enter the new policy name",
+                "type":        "Enter the type: **jml**, **access**, or **mfa**",
+                "department":  f"Enter the department: {', '.join(sorted(ALLOWED_DEPARTMENTS))}",
+                "vpn":         "Enter the VPN profile (e.g. vpn_hr, vpn_fin, vpn_eng, vpn_sales, vpn_sec)",
+                "description": "Enter a new description for this policy",
+                "status":      "Enter **active** or **inactive**",
+            }
+            return (
+                f"Update policy recorded: {_upd_pol_id}\n"
+                f"Update field recorded: {_upd_field_norm}\n\n"
+                f"Current **{_upd_field_norm}**: `{_cur_val}`\n\n"
+                f"{_hints.get(_upd_field_norm, 'Enter the new value')}:"
+            )
+
+        # ── All collected — validate and apply the update ──
+        _update_doc = {"updated_on": datetime.utcnow()}
+        if _upd_field_norm == "type":
+            if _upd_new_val.lower() not in ("jml", "access", "mfa"):
+                return (
+                    f"Update policy recorded: {_upd_pol_id}\n"
+                    f"Update field recorded: {_upd_field_norm}\n\n"
+                    f"⚠️ Invalid type **'{_upd_new_val}'**. Must be **jml**, **access**, or **mfa**."
+                )
+            _update_doc["type"] = _upd_new_val.lower()
+        elif _upd_field_norm == "status":
+            if _upd_new_val.lower() in ("active", "true", "yes", "enable", "1"):
+                _update_doc["is_active"] = True
+            elif _upd_new_val.lower() in ("inactive", "false", "no", "disable", "0"):
+                _update_doc["is_active"] = False
+            else:
+                return (
+                    f"Update policy recorded: {_upd_pol_id}\n"
+                    f"Update field recorded: {_upd_field_norm}\n\n"
+                    f"⚠️ Invalid status **'{_upd_new_val}'**. Use **active** or **inactive**."
+                )
+        elif _upd_field_norm == "department":
+            if _upd_new_val.lower() not in ALLOWED_DEPARTMENTS:
+                return (
+                    f"Update policy recorded: {_upd_pol_id}\n"
+                    f"Update field recorded: {_upd_field_norm}\n\n"
+                    f"⚠️ **'{_upd_new_val}'** is not a valid department.\n"
+                    f"Choose from: **{', '.join(sorted(ALLOWED_DEPARTMENTS))}**"
+                )
+            _update_doc["department"] = _upd_new_val.lower()
+        else:
+            _update_doc[_upd_field_norm] = _upd_new_val
+
+        await db["policies"].update_one({"pol_id": _upd_pol_id}, {"$set": _update_doc})
         await db["audit_logs"].insert_one({
             "user_id": "admin",
             "action": "update_policy",
-            "target_resource": policy_id,
-            "details": f"Admin updated policy '{existing.get('name', policy_id)}' — changes: {list(updates.keys())}.",
+            "target_resource": _upd_pol_id,
+            "details": f"Admin updated policy '{_existing.get('name', _upd_pol_id)}' — field '{_upd_field_norm}' changed to '{_upd_new_val}'.",
             "timestamp": datetime.utcnow(),
         })
-        updated = {**existing, **updates}
+        _updated = {**_existing, **_update_doc}
         return (
             f"✅ **Policy updated successfully!**\n\n"
-            f"- **Policy ID:** {policy_id}\n"
-            f"- **Name:** {updated.get('name')}\n"
-            f"- **Type:** {updated.get('type')}\n"
-            f"- **Department:** {updated.get('department')}\n"
-            f"- **VPN Profile:** {updated.get('vpn')}\n"
-            f"- **Status:** {'Active' if updated.get('is_active') else 'Inactive'}"
+            f"- **Policy ID:** {_upd_pol_id}\n"
+            f"- **Name:** {_updated.get('name')}\n"
+            f"- **Type:** {_updated.get('type')}\n"
+            f"- **Department:** {_updated.get('department')}\n"
+            f"- **VPN Profile:** {_updated.get('vpn')}\n"
+            f"- **Status:** {'Active' if _updated.get('is_active') else 'Inactive'}"
         )
 
     elif intent == "general_query":
@@ -1499,17 +1807,24 @@ async def _handle_general_query(entities: dict, db) -> str:
 
 async def admin_chat(user_message: str, history: list, db, user_role: str = "admin") -> tuple:
 
+    def _get_content(h: dict) -> str:
+        """Return message text regardless of whether the frontend used 'text' or 'content'."""
+        return h.get("text") or h.get("content") or ""
+
     # ── Trim history at last completed policy/invite to prevent LLM entity leakage ──
     fresh_history = history
     if isinstance(history, list):
         for i, h in enumerate(history):
-            if isinstance(h, dict) and h.get("role") == "assistant" and (
-                "Policy created successfully" in h.get("content", "") or
-                "Invitation sent successfully" in h.get("content", "")
+            if isinstance(h, dict) and h.get("role") in ("assistant", "bot") and (
+                "Policy created successfully" in _get_content(h) or
+                "Invitation sent successfully" in _get_content(h)
             ):
                 fresh_history = history[i + 1:]
 
     # ── Intent Lock: detect active multi-step policy creation ─────────────────
+    # Scan bot messages since the last successful policy creation for BOTH active
+    # policy question prompts AND partial-field confirmation markers. This makes
+    # the lock survive transient error/interrupt messages that appear mid-session.
     _POLICY_QUESTIONS = [
         "Policy Name: What should this policy be called",
         "Policy Type: Select one of the following",
@@ -1517,118 +1832,57 @@ async def admin_chat(user_message: str, history: list, db, user_role: str = "adm
         "Description: Provide a brief description",
         "VPN Profile: Specify the VPN profile",
     ]
+    _POLICY_SESSION_MARKERS = [
+        "Policy creation initiated",
+        "Policy name recorded:",
+        "Policy type recorded:",
+        "Policy department recorded:",
+        "Description recorded.",
+    ]
     _in_policy_form = False
     if isinstance(history, list):
-        for h in reversed(history):
-            if isinstance(h, dict) and h.get("role") == "assistant":
-                last_bot = h.get("content", "")
-                if any(q in last_bot for q in _POLICY_QUESTIONS):
-                    _in_policy_form = True
-                break  # only check the most recent bot message
-
-    # ── Intent Lock: detect joiner onboarding menu waiting for choice ───────────
-    _JOINER_MENU_MARKER = "Reply with **1** to onboard directly, or **2** to send an invite email."
-    _in_joiner_menu = False
-    if isinstance(history, list):
-        for h in reversed(history):
-            if isinstance(h, dict) and h.get("role") == "assistant":
-                if _JOINER_MENU_MARKER in h.get("content", ""):
-                    _in_joiner_menu = True
+        _pol_session_start = 0
+        for _i, _h in enumerate(history):
+            if isinstance(_h, dict) and _h.get("role") in ("assistant", "bot"):
+                if "Policy created successfully" in _get_content(_h):
+                    _pol_session_start = _i + 1
+        _scanned_bots = 0
+        for _h in reversed(history[_pol_session_start:]):
+            if not isinstance(_h, dict) or _h.get("role") not in ("assistant", "bot"):
+                continue
+            _bc = _get_content(_h)
+            if any(q in _bc for q in _POLICY_QUESTIONS) or any(m in _bc for m in _POLICY_SESSION_MARKERS):
+                _in_policy_form = True
+                break
+            _scanned_bots += 1
+            if _scanned_bots >= 10:
                 break
 
-    if _in_joiner_menu:
-        msg_lower = user_message.lower().strip()
-        _ABORT_WORDS = ["cancel", "abort", "exit", "quit", "stop"]
-        if any(w in msg_lower for w in _ABORT_WORDS):
-            return "\u274c *Joiner onboarding cancelled.*", {"intent": "unknown", "entities": {}}
-        # Route: "2" / "invite" / "email" → invite_joiner; anything else → direct joiner
-        _INVITE_CHOICE = ["2", "two", "invite", "email", "send invite", "via email", "send email"]
-        if any(kw in msg_lower for kw in _INVITE_CHOICE):
-            _inv_data = {
-                "intent": "invite_joiner",
-                "entities": {},
-                "missing_fields": [],
-                "history": history,
-                "current_message": user_message,
-            }
-            _resp = await execute_admin_intent(_inv_data, db)
-            return _resp, _inv_data
-        else:
-            _joiner_data = {
-                "intent": "joiner",
-                "entities": {},
-                "missing_fields": [],
-                "history": history,
-                "current_message": user_message,
-            }
-            _resp = await execute_admin_intent(_joiner_data, db)
-            return _resp, _joiner_data
-
-    # ── Intent Lock: detect active invite form ────────────────────────────────
-    # Detect by checking whether the last bot message is still collecting invite fields.
-    # Markers are the structural confirmation lines written by the invite handler.
-    _INVITE_MARKERS = [
-        "invite email address",
-        "Email address recorded:",
-        "Department recorded:",
-    ]
-    _in_invite_form = False
-    if isinstance(history, list):
-        for h in reversed(history):
-            if isinstance(h, dict) and h.get("role") == "assistant":
-                last_bot_inv = h.get("content", "")
-                # Only lock if we haven't completed the invite yet
-                if any(m in last_bot_inv for m in _INVITE_MARKERS) and "Invitation sent successfully" not in last_bot_inv:
-                    _in_invite_form = True
-                break
-
-    if _in_invite_form:
-        msg_lower = user_message.lower().strip()
-        _ABORT_WORDS = ["cancel", "abort", "exit", "quit", "stop"]
-        if any(w in msg_lower for w in _ABORT_WORDS):
-            return "\u274c *Invite cancelled.*", {"intent": "unknown", "entities": {}}
-        # Stay in invite form — history replay in the handler rebuilds all state.
-        inv_intent_data = {
-            "intent": "invite_joiner",
-            "entities": {},
-            "missing_fields": [],
-            "history": history,
-            "current_message": user_message,
-        }
-        response = await execute_admin_intent(inv_intent_data, db)
-        return response, inv_intent_data
-
+    # ── POLICY FORM LOCK — evaluated FIRST (highest priority) ─────────────────
     if _in_policy_form:
-        # Escape hatch: check if the user is asking a question OR trying to run a totally different command
+        # Only divert away for EXPLICIT abort words or unambiguous "?" questions.
+        # Free-form descriptions/names must NEVER trigger LLM re-classification
+        # because the LLM may mis-classify them as invite_joiner and corrupt flow.
         msg_lower = user_message.lower().strip()
-        _QUESTION_INDICATORS = ["what", "how", "who", "which", "list", "show", "count",
-                                 "how many", "tell me", "explain", "?", "describe"]
-        _ACTION_INDICATORS = ["cancel", "abort", "exit", "quit", "stop",
-                              "create ", "delete ", "update ", "remove ", "onboard ", 
-                              "offboard ", "transfer ", "disable ", "reinstate ", "help"]
-        
-        _might_be_question = any(ind in msg_lower for ind in _QUESTION_INDICATORS)
-        _might_be_action = any(msg_lower.startswith(ind) or msg_lower == ind.strip() for ind in _ACTION_INDICATORS)
-
-        if _might_be_question or _might_be_action:
-            # Let the LLM classify this message using clean history
+        _ABORT_WORDS = {"cancel", "abort", "exit", "quit", "stop"}
+        _is_explicit_abort = msg_lower in _ABORT_WORDS
+        _WH_STARTERS = ("what ", "how ", "who ", "which ", "why ", "where ", "when ")
+        _is_clear_question = (
+            msg_lower.endswith("?")
+            or any(msg_lower.startswith(w) for w in _WH_STARTERS)
+        )
+        if _is_explicit_abort or _is_clear_question:
+            if _is_explicit_abort:
+                return "❌ *Policy creation cancelled.*", {"intent": "unknown", "entities": {}}
             q_intent_data = await extract_admin_intent(user_message, fresh_history)
             q_intent = q_intent_data.get("intent", "unknown")
-            
-            # If the LLM successfully classified it as a DIFFERENT defined intent:
             if q_intent not in ("create_policy", "unknown"):
                 q_intent_data["history"] = history
                 answer = await execute_admin_intent(q_intent_data, db)
-                
-                # If it was an action intent, we fully abort the form creation
-                _ACTION_INTENTS = {"joiner", "mover", "leaver", "disable", "reinstate", "bulk_joiner", "bulk_leaver", "delete_policy", "update_policy", "invite_joiner"}
-                if q_intent in _ACTION_INTENTS or msg_lower in ("cancel", "abort", "exit", "quit", "stop"):
-                    return answer + "\n\n❌ *Previous policy creation aborted.*", q_intent_data
-                else:
-                    # It was a query/read-only intent — pause and resume the form
-                    return answer + "\n\n---\n📝 *Resuming policy creation — please answer the previous question to continue.*", q_intent_data
-
-        # Normal policy form path (user is just answering the form question)
+                return (
+                    answer + "\n\n---\n📝 *Resuming policy creation — please answer the previous question to continue.*",
+                    q_intent_data,
+                )
         intent_data = {
             "intent": "create_policy",
             "entities": {},
@@ -1638,11 +1892,324 @@ async def admin_chat(user_message: str, history: list, db, user_role: str = "adm
         }
         response = await execute_admin_intent(intent_data, db)
         return response, intent_data
-    # ─────────────────────────────────────────────────────────────────────────
+    # ── END POLICY FORM LOCK ───────────────────────────────────────────────────
+
+    # ── Intent Lock: detect active direct joiner onboarding ─────────────────────
+    # Scan recent bot messages (since last successful onboarding) for joiner-
+    # specific prompts. Prevents field answers like "finance" being classified
+    # as help / general_query by the LLM.
+    _JOINER_FORM_MARKERS = [
+        "Let's onboard a new employee.",
+        "Please provide the employee's **full name**",
+        "Which **department** will they be joining?",
+        "What is their **role** in the organisation?",
+        "Please provide the employee's **email address**",
+    ]
+    _in_joiner_direct_form = False
+    if isinstance(history, list):
+        _joiner_done_idx = 0
+        for _i, _h in enumerate(history):
+            if isinstance(_h, dict) and _h.get("role") in ("assistant", "bot"):
+                if "has been successfully onboarded!" in _get_content(_h):
+                    _joiner_done_idx = _i + 1
+        _jscanned = 0
+        for _h in reversed(history[_joiner_done_idx:]):
+            if not isinstance(_h, dict) or _h.get("role") not in ("assistant", "bot"):
+                continue
+            _bc = _get_content(_h)
+            if any(m in _bc for m in _JOINER_FORM_MARKERS):
+                _in_joiner_direct_form = True
+                break
+            _jscanned += 1
+            if _jscanned >= 10:
+                break
+
+    if _in_joiner_direct_form:
+        msg_lower = user_message.lower().strip()
+        if msg_lower in {"cancel", "abort", "exit", "quit", "stop"}:
+            return "❌ *Onboarding cancelled.*", {"intent": "unknown", "entities": {}}
+
+        # ── Parse confirmed fields + detect last-asked field from history ──────
+        # We bypass the LLM entirely for single-field answers to avoid LLM
+        # misclassification (e.g. "hr" mapped to role:hr_manager instead of
+        # department:hr, or off-topic messages like "Show all policies" causing
+        # the LLM to drop previously-confirmed name/dept).
+        # Strategy:
+        #   1. Replay bot confirmation messages to recover all confirmed values.
+        #   2. Detect which field was LAST asked (from the last bot message).
+        #   3. Directly assign the user's current reply to that field.
+        #   4. Fall back to LLM only for ambiguous/multi-field inputs.
+        _confirmed_name = None
+        _confirmed_dept = None
+        _confirmed_role = None
+        _last_asked = None   # "name" | "department" | "role" | "email"
+
+        if isinstance(history, list):
+            _j_done_idx = 0
+            for _i, _h in enumerate(history):
+                if isinstance(_h, dict) and _h.get("role") in ("assistant", "bot"):
+                    if "has been successfully onboarded!" in _get_content(_h):
+                        _j_done_idx = _i + 1
+            for _h in history[_j_done_idx:]:
+                if not isinstance(_h, dict) or _h.get("role") not in ("assistant", "bot"):
+                    continue
+                _bc = _get_content(_h)
+                # "Almost done — **{name}** joining **{dept}** as **{role}**."
+                # → all three fields confirmed; bot is now asking for email
+                if "Almost done —" in _bc and " joining **" in _bc and " as **" in _bc:
+                    try:
+                        _parts = _bc.split("Almost done —")[1].split("\n")[0].strip().split("**")
+                        if len(_parts) >= 6:
+                            _confirmed_name = _parts[1].strip()
+                            _confirmed_dept = _parts[3].strip()
+                            _confirmed_role = _parts[5].strip()
+                    except Exception:
+                        pass
+                    _last_asked = "email"
+                # "Great — **{name}** joining **{dept}**."
+                # → name + dept confirmed; bot is now asking for role
+                elif "Great —" in _bc and " joining **" in _bc:
+                    try:
+                        _parts = _bc.split("Great —")[1].split("\n")[0].strip().split("**")
+                        if len(_parts) >= 4:
+                            _confirmed_name = _parts[1].strip()
+                            _confirmed_dept = _parts[3].strip()
+                    except Exception:
+                        pass
+                    _last_asked = "role"
+                # "Got it — **{name}**."
+                # → name confirmed; bot is now asking for department
+                elif "Got it —" in _bc:
+                    try:
+                        _parts = _bc.split("Got it —")[1].split("\n")[0].strip().split("**")
+                        if len(_parts) >= 2:
+                            _confirmed_name = _parts[1].strip()
+                    except Exception:
+                        pass
+                    _last_asked = "department"
+                # "Let's onboard a new employee. Please provide the employee's **full name**"
+                elif "Please provide the employee's **full name**" in _bc:
+                    _last_asked = "name"
+
+        # ── Directly assign user reply to the field being collected ──────────
+        # This makes the form 100% deterministic for the happy path and immune
+        # to LLM role-mapping (e.g. "hr" → hr_manager) or entity-drop bugs.
+        _direct_entities: dict = {
+            "name":       _confirmed_name,
+            "department": _confirmed_dept,
+            "role":       _confirmed_role,
+            "email":      None,
+        }
+
+        if _last_asked == "name":
+            _direct_entities["name"] = user_message.strip()
+        elif _last_asked == "department":
+            _direct_entities["department"] = user_message.strip().lower()
+        elif _last_asked == "role":
+            _direct_entities["role"] = user_message.strip()
+        elif _last_asked == "email":
+            _direct_entities["email"] = user_message.strip()
+        else:
+            # Ambiguous / multi-field message: fall back to LLM extraction
+            _jd_llm = await extract_admin_intent(user_message, fresh_history, forced_intent="joiner")
+            _llm_ents = _jd_llm.get("entities", {})
+            # Merge: history-confirmed values fill gaps the LLM may have dropped
+            if _confirmed_name and not _llm_ents.get("name"):
+                _llm_ents["name"] = _confirmed_name
+            if _confirmed_dept and not _llm_ents.get("department"):
+                _llm_ents["department"] = _confirmed_dept
+            if _confirmed_role and not _llm_ents.get("role"):
+                _llm_ents["role"] = _confirmed_role
+            _direct_entities = _llm_ents
+
+        _jd = {
+            "intent": "joiner",
+            "entities": _direct_entities,
+            "missing_fields": [],
+            "history": history,
+            "current_message": user_message,
+        }
+        response = await execute_admin_intent(_jd, db)
+        return response, _jd
+
+    # ── Intent Lock: detect active mover workflow ─────────────────────────────
+    # Scan recent bot messages (since last transfer) for mover-specific prompts.
+    _MOVER_FORM_MARKERS = [
+        "I need the **User ID** of the employee to transfer",
+        "Which **department** should they move to?",
+        "What will their **new role** be?",
+        "Currently in: **",
+    ]
+    _in_mover_form = False
+    if isinstance(history, list):
+        _mover_done_idx = 0
+        for _i, _h in enumerate(history):
+            if isinstance(_h, dict) and _h.get("role") in ("assistant", "bot"):
+                if "has been successfully transferred!" in _get_content(_h):
+                    _mover_done_idx = _i + 1
+        _mscanned = 0
+        for _h in reversed(history[_mover_done_idx:]):
+            if not isinstance(_h, dict) or _h.get("role") not in ("assistant", "bot"):
+                continue
+            _bc = _get_content(_h)
+            if any(m in _bc for m in _MOVER_FORM_MARKERS):
+                _in_mover_form = True
+                break
+            _mscanned += 1
+            if _mscanned >= 10:
+                break
+
+    if _in_mover_form:
+        msg_lower = user_message.lower().strip()
+        if msg_lower in {"cancel", "abort", "exit", "quit", "stop"}:
+            return "❌ *Transfer cancelled.*", {"intent": "unknown", "entities": {}}
+        # Run LLM to extract entities, but force intent to "mover"
+        _md = await extract_admin_intent(user_message, fresh_history, forced_intent="mover")
+        _md["intent"] = "mover"
+        _md["history"] = history
+        _md["current_message"] = user_message
+        response = await execute_admin_intent(_md, db)
+        return response, _md
+
+    # ── Intent Lock: detect joiner onboarding menu waiting for choice ──────────
+    _JOINER_MENU_MARKER = "Reply with **1** to onboard directly, or **2** to send an invite email."
+    _in_joiner_menu = False
+    if isinstance(history, list):
+        for h in reversed(history):
+            if isinstance(h, dict) and h.get("role") in ("assistant", "bot"):
+                if _JOINER_MENU_MARKER in _get_content(h):
+                    _in_joiner_menu = True
+                break
+
+    if _in_joiner_menu:
+        msg_lower = user_message.lower().strip()
+        _ABORT_WORDS = ["cancel", "abort", "exit", "quit", "stop"]
+        if any(w in msg_lower for w in _ABORT_WORDS):
+            return "\u274c *Joiner onboarding cancelled.*", {"intent": "unknown", "entities": {}}
+        _INVITE_CHOICE = ["2", "two", "invite", "email", "send invite", "via email", "send email"]
+        if any(kw in msg_lower for kw in _INVITE_CHOICE):
+            _inv_data = await extract_admin_intent(user_message, fresh_history, forced_intent="invite_joiner")
+            _inv_data["intent"] = "invite_joiner"
+            _inv_data["history"] = history
+            _inv_data["current_message"] = user_message
+            _resp = await execute_admin_intent(_inv_data, db)
+            return _resp, _inv_data
+        else:
+            _joiner_data = await extract_admin_intent(user_message, fresh_history, forced_intent="joiner")
+            _joiner_data["intent"] = "joiner"
+            _joiner_data["history"] = history
+            _joiner_data["current_message"] = user_message
+            _resp = await execute_admin_intent(_joiner_data, db)
+            return _resp, _joiner_data
+
+    # ── Intent Lock: detect active invite form ─────────────────────────────────
+    _INVITE_MARKERS = [
+        "invite email address",
+        "Invite email recorded:",
+        "Invite department recorded:",
+    ]
+    _in_invite_form = False
+    if isinstance(history, list):
+        for h in reversed(history):
+            if isinstance(h, dict) and h.get("role") in ("assistant", "bot"):
+                last_bot_inv = _get_content(h)
+                if any(m in last_bot_inv for m in _INVITE_MARKERS) and "Invitation sent successfully" not in last_bot_inv:
+                    _in_invite_form = True
+                break
+
+    if _in_invite_form:
+        msg_lower = user_message.lower().strip()
+        _ABORT_WORDS = ["cancel", "abort", "exit", "quit", "stop"]
+        if any(w in msg_lower for w in _ABORT_WORDS):
+            return "❌ *Invite cancelled.*", {"intent": "unknown", "entities": {}}
+        inv_intent_data = await extract_admin_intent(user_message, fresh_history, forced_intent="invite_joiner")
+        inv_intent_data["intent"] = "invite_joiner"
+        inv_intent_data["history"] = history
+        inv_intent_data["current_message"] = user_message
+        response = await execute_admin_intent(inv_intent_data, db)
+        return response, inv_intent_data
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # ── Intent Lock: detect active update_policy flow ─────────────────────────
+    # Structural markers: "Update policy recorded:" and "Update field recorded:"
+    # Lock fires as long as the last bot message contains one of these markers
+    # and there has been no successful update since.
+    _UPDATE_POLICY_MARKERS = ["Update policy recorded:", "Update field recorded:"]
+    _in_update_policy_form = False
+    if isinstance(history, list):
+        for h in reversed(history):
+            if isinstance(h, dict) and h.get("role") in ("assistant", "bot"):
+                _ubc = _get_content(h)
+                if any(m in _ubc for m in _UPDATE_POLICY_MARKERS) and "Policy updated successfully!" not in _ubc:
+                    _in_update_policy_form = True
+                break
+
+    if _in_update_policy_form:
+        msg_lower = user_message.lower().strip()
+        if msg_lower in {"cancel", "abort", "exit", "quit", "stop"}:
+            return "❌ *Update cancelled.*", {"intent": "unknown", "entities": {}}
+        _upd_intent_data = {
+            "intent": "update_policy",
+            "entities": {},
+            "missing_fields": [],
+            "history": history,
+            "current_message": user_message,
+        }
+        response = await execute_admin_intent(_upd_intent_data, db)
+        return response, _upd_intent_data
+    # ── END UPDATE POLICY LOCK ─────────────────────────────────────────────────
 
     intent_data = await extract_admin_intent(user_message, fresh_history)
-    intent_data["history"] = history  # full history still goes to the state machine
+    intent_data["history"] = history
     intent = intent_data.get("intent", "unknown")
+
+    # ── Safety guard: if the LLM returns an off-topic intent while we are clearly
+    # inside an active multi-step form session, override it to the correct intent.
+    # Covers: policy, joiner-direct, and mover sessions.
+    _OFF_TOPIC = {"help", "greeting", "general_query", "unknown", "invite_joiner"}
+    if intent in _OFF_TOPIC and isinstance(history, list):
+
+        # Policy session guard
+        _pg_start = 0
+        for _gi, _gh in enumerate(history):
+            if isinstance(_gh, dict) and _gh.get("role") in ("assistant", "bot"):
+                if "Policy created successfully" in _get_content(_gh):
+                    _pg_start = _gi + 1
+        for _gh in history[_pg_start:]:
+            if isinstance(_gh, dict) and _gh.get("role") in ("assistant", "bot"):
+                if any(m in _get_content(_gh) for m in _POLICY_SESSION_MARKERS):
+                    intent_data["intent"] = "create_policy"
+                    intent_data["entities"] = {}
+                    intent = "create_policy"
+                    break
+
+        # Joiner direct session guard (only if policy guard didn't fire)
+        if intent in _OFF_TOPIC:
+            _jg_start = 0
+            for _gi, _gh in enumerate(history):
+                if isinstance(_gh, dict) and _gh.get("role") in ("assistant", "bot"):
+                    if "has been successfully onboarded!" in _get_content(_gh):
+                        _jg_start = _gi + 1
+            for _gh in history[_jg_start:]:
+                if isinstance(_gh, dict) and _gh.get("role") in ("assistant", "bot"):
+                    if any(m in _get_content(_gh) for m in _JOINER_FORM_MARKERS):
+                        intent_data["intent"] = "joiner"
+                        intent = "joiner"
+                        break
+
+        # Mover session guard (only if neither policy nor joiner guard fired)
+        if intent in _OFF_TOPIC:
+            _mg_start = 0
+            for _gi, _gh in enumerate(history):
+                if isinstance(_gh, dict) and _gh.get("role") in ("assistant", "bot"):
+                    if "has been successfully transferred!" in _get_content(_gh):
+                        _mg_start = _gi + 1
+            for _gh in history[_mg_start:]:
+                if isinstance(_gh, dict) and _gh.get("role") in ("assistant", "bot"):
+                    if any(m in _get_content(_gh) for m in _MOVER_FORM_MARKERS):
+                        intent_data["intent"] = "mover"
+                        intent = "mover"
+                        break
 
     # Route RAG/fraud queries directly to the RAG engine unless user is HR
     if intent == "rag_query":

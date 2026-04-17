@@ -10,7 +10,7 @@ from app.services.user_chatbot import user_chat, extract_user_intent
 
 router = APIRouter(prefix="/api/chatbot", tags=["Chatbot"])
 
-ADMIN_ROLES = ["Security Admin", "System Administrator", "HR Manager", "admin"]
+ADMIN_ROLES = ["Security Admin", "System Administrator", "HR Manager", "admin", "hr", "HR"]
 
 # Keywords that suggest the admin is making a personal VPN/access request for themselves
 _ACCESS_KEYWORDS = [
