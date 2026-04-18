@@ -187,8 +187,8 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
         }
     };
 
-    const handleRevokeAccess = async () => {
-        if (!confirm(`Are you sure you want to revoke your VPN access? You will need to request access again from an administrator.`)) {
+    const handleRevokeConfig = async () => {
+        if (!confirm(`Are you sure you want to revoke your current VPN config? Your approved VPN access will remain available so you can provision another profile.`)) {
             return;
         }
         
@@ -209,13 +209,13 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
                 });
                 await refreshVpnData();
                 setVpnMark(null);
-                alert('VPN access has been revoked.');
+                alert('VPN config has been revoked.');
             } else {
                 const data = await res.json();
-                alert(data.detail || 'Failed to revoke access');
+                alert(data.detail || 'Failed to revoke VPN config');
             }
         } catch (err) {
-            alert('Failed to revoke access');
+            alert('Failed to revoke VPN config');
         } finally {
             setLoadingVpn(null);
         }
@@ -314,12 +314,12 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
 
                     {vpnStatus.has_provisioned && (
                         <button
-                            onClick={handleRevokeAccess}
+                            onClick={handleRevokeConfig}
                             disabled={loadingVpn !== null}
                             className="w-full mt-4 py-2.5 px-4 bg-error/10 border border-error/30 text-error rounded-xl text-sm font-semibold hover:bg-error/20 transition-all flex items-center justify-center gap-2"
                         >
                             <FontAwesomeIcon icon={faBan} className="text-sm" />
-                            {loadingVpn === 'revoke' ? 'Revoking...' : 'Revoke Access'}
+                            {loadingVpn === 'revoke' ? 'Revoking...' : 'Revoke Config'}
                         </button>
                     )}
                 </div>

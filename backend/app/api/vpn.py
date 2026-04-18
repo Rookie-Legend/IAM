@@ -14,6 +14,12 @@ class AllocateRequest(BaseModel):
     vpn_id: str
     department: str = "Engineering"
 
+async def preserve_vpn_access(db, user_id: str, vpn_access: list[str]):
+    await db["access_states"].update_one(
+        {"user_id": user_id},
+        {"$set": {"vpn_access": vpn_access}}
+    )
+
 @router.get("/available")
 async def get_available_vpns(db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
     state = await db["access_states"].find_one({"user_id": current_user.user_id})
@@ -135,6 +141,7 @@ async def switch_vpn(new_vpn_id: str, db=Depends(get_database), current_user: Us
     state = await db["access_states"].find_one({"user_id": current_user.user_id})
     if not state or new_vpn_id not in state.get("vpn_access", []):
         raise HTTPException(status_code=403, detail="Not authorized for this VPN")
+    granted_vpns = list(state.get("vpn_access", []))
 
     active_session = await db["vpn_sessions"].find_one({
         "user_id": current_user.user_id,
@@ -167,6 +174,7 @@ async def switch_vpn(new_vpn_id: str, db=Depends(get_database), current_user: Us
                 timeout=10.0
             )
             revoke_res.raise_for_status()
+            await preserve_vpn_access(db, current_user.user_id, granted_vpns)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to revoke current VPN: {str(e)}")
 
@@ -216,6 +224,7 @@ async def download_vpn_profile(db=Depends(get_database), current_user: UserInDB 
 @router.post("/disconnect")
 async def disconnect_vpn(db=Depends(get_database), current_user: UserInDB = Depends(get_current_user)):
     state = await db["access_states"].find_one({"user_id": current_user.user_id})
+    granted_vpns = list(state.get("vpn_access", [])) if state else []
     active_session = await db["vpn_sessions"].find_one({
         "user_id": current_user.user_id,
         "is_active": True
@@ -234,7 +243,20 @@ async def disconnect_vpn(db=Depends(get_database), current_user: UserInDB = Depe
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Disconnect error: {str(e)}")
 
-    return {"status": "success", "message": "Disconnected and access revoked"}
+    await db["access_states"].update_one(
+        {"user_id": current_user.user_id},
+        {"$set": {
+            "vpn_access": granted_vpns,
+            "has_provisioned": False,
+            "provisioned_vpn": None,
+            "connected": False,
+            "connected_vpn": None,
+            "connected_ip": None,
+            "last_disconnected_at": datetime.utcnow()
+        }}
+    )
+
+    return {"status": "success", "message": "VPN config revoked. Access permissions preserved."}
 
 @router.post("/revoke/{user_id}")
 async def revoke_vpn(user_id: str, db=Depends(get_database), admin=Depends(get_current_admin)):
