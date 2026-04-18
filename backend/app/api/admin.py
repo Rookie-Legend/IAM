@@ -134,7 +134,7 @@ async def approve_access_request(request_id: str, db=Depends(get_database), admi
 
     await db["access_requests"].update_one(
         {"_id": ObjectId(request_id)},
-        {"$set": {"status": "approved", "resource_type": resource_type}}
+        {"$set": {"status": "approved", "resource_type": resource_type, "decided_at": datetime.utcnow()}}
     )
 
     if user_id and resource_type:
@@ -189,7 +189,7 @@ async def deny_access_request(request_id: str, db=Depends(get_database), admin=D
     if not access_req:
         return {"status": "error", "message": "Access request not found"}
     
-    await db["access_requests"].update_one({"_id": ObjectId(request_id)}, {"$set": {"status": "denied"}})
+    await db["access_requests"].update_one({"_id": ObjectId(request_id)}, {"$set": {"status": "denied", "decided_at": datetime.utcnow()}})
     
     user_id = access_req.get("user_id")
     resource_type = access_req.get("resource_type")
@@ -208,3 +208,37 @@ async def deny_access_request(request_id: str, db=Depends(get_database), admin=D
         "timestamp": datetime.utcnow()
     })
     return {"status": "success", "message": "Access request denied"}
+
+# ── Admin Escalation Notification endpoints ──
+
+@router.get("/escalation-notifications")
+async def get_escalation_notifications(db=Depends(get_database), admin=Depends(get_current_admin)):
+    """Return pending escalation requests that the admin hasn't dismissed from the bell."""
+    cursor = db["access_requests"].find({
+        "status": "pending",
+        "admin_notif_dismissed": {"$ne": True}
+    }).sort("timestamp", -1)
+    requests = await cursor.to_list(length=100)
+    result = []
+    for r in requests:
+        ts = r.get("timestamp")
+        result.append({
+            "id": str(r["_id"]),
+            "user_id": r.get("user_id", "Unknown"),
+            "resource_type": r.get("resource_type", "Unknown"),
+            "timestamp": (ts.strftime('%Y-%m-%dT%H:%M:%S.') + f'{ts.microsecond:06d}'[:3] + 'Z') if ts else None,
+        })
+    return result
+
+@router.post("/escalation-notifications/{request_id}/dismiss")
+async def dismiss_escalation_notification(request_id: str, db=Depends(get_database), admin=Depends(get_current_admin)):
+    """Mark a pending escalation notification as dismissed from the bell (does NOT approve/deny the request)."""
+    from bson import ObjectId
+    from fastapi import HTTPException
+    result = await db["access_requests"].update_one(
+        {"_id": ObjectId(request_id)},
+        {"$set": {"admin_notif_dismissed": True}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"status": "dismissed"}
