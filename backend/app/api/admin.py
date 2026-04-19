@@ -124,7 +124,7 @@ async def offboard_user(user_id: str, db=Depends(get_database), admin=Depends(ge
 @router.post("/gitlab-sync")
 async def sync_gitlab_users(db=Depends(get_database), admin=Depends(get_current_admin)):
     users = await db["users"].find({}).to_list(length=1000)
-    summary = await backfill_gitlab_users(users)
+    summary = await backfill_gitlab_users(users, db=db)
     await db["audit_logs"].insert_one({
         "user_id": admin.user_id,
         "action": "gitlab_sync",

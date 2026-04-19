@@ -72,9 +72,9 @@ async def get_my_status(db=Depends(get_database), current_user: UserInDB = Depen
         }
 
     derived_connected = bool(active_session)
-    derived_vpn = (active_session.get("vpn_id") if active_session else None) or state.get("connected_vpn")
-    derived_ip = ((active_session.get("vpn_ip") or active_session.get("assigned_ip")) if active_session else None) or state.get("connected_ip")
-    derived_connected_at = (active_session.get("connected_at") if active_session else None) or state.get("connected_at")
+    derived_vpn = active_session.get("vpn_id") if active_session else None
+    derived_ip = (active_session.get("vpn_ip") or active_session.get("assigned_ip")) if active_session else None
+    derived_connected_at = active_session.get("connected_at") if active_session else None
     derived_provisioned = bool(state.get("has_provisioned", False))
     derived_provisioned_vpn = state.get("provisioned_vpn")
 
@@ -252,6 +252,7 @@ async def disconnect_vpn(db=Depends(get_database), current_user: UserInDB = Depe
             "connected": False,
             "connected_vpn": None,
             "connected_ip": None,
+            "connected_at": None,
             "last_disconnected_at": datetime.utcnow()
         }}
     )

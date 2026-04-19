@@ -7,9 +7,10 @@ from app.core.database import get_database
 from app.core.security import get_password_hash
 from app.api.dependencies import get_current_admin
 from app.api.vpn import revoke_vpn
+from app.api.auth import generate_user_id
 from app.services.email_service import send_email
 from app.core.config import settings
-from app.services.gitlab_sync import block_gitlab_user, ensure_gitlab_user, unblock_gitlab_user
+from app.services.gitlab_sync import DEFAULT_GITLAB_TEMP_PASSWORD, block_gitlab_user, ensure_gitlab_user, unblock_gitlab_user
 
 router = APIRouter(prefix="/api/jml", tags=["JML"])
 
@@ -67,24 +68,27 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
     now = datetime.utcnow()
 
     if request.event_type == "joiner":
-        existing = await db["users"].find_one({"user_id": request.user_id})
+        department = request.department or "engineering"
+        username = request.user_id.strip()
+        generated_user_id = await generate_user_id(db, department)
+        existing = await db["users"].find_one({"$or": [{"username": username}, {"user_id": generated_user_id}]})
         if existing:
             raise HTTPException(status_code=400, detail="User already exists")
         new_user = {
-            "user_id": request.user_id,
-            "username": request.user_id,
-            "email": request.email or f"{request.user_id}@company.com",
-            "full_name": request.full_name or request.user_id,
-            "department": request.department or "engineering",
+            "user_id": generated_user_id,
+            "username": username,
+            "email": request.email or f"{username}@company.com",
+            "full_name": request.full_name or username,
+            "department": department,
             "role": request.role or "software_engineer",
             "status": "inactive",
             "disabled": False,
-            "hashed_password": get_password_hash("TempPass@123")
+            "hashed_password": get_password_hash(DEFAULT_GITLAB_TEMP_PASSWORD)
         }
         await db["users"].insert_one(new_user)
-        gitlab_sync = await ensure_gitlab_user(new_user, "TempPass@123")
+        gitlab_sync = await ensure_gitlab_user(new_user, DEFAULT_GITLAB_TEMP_PASSWORD)
         await db["access_states"].insert_one({
-            "user_id": request.user_id,
+            "user_id": generated_user_id,
             "vpn_access": [],
             "connected": False,
             "connected_vpn": None,
@@ -95,14 +99,16 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
         await db["audit_logs"].insert_one({
             "user_id": admin.user_id,
             "action": "joiner",
-            "target_user": request.user_id,
+            "target_user": generated_user_id,
             "target_name": new_user["full_name"],
-            "details": f"Admin {admin.user_id} ({admin.role}) onboarded new employee {request.user_id} ({new_user['full_name']}) in {new_user['department']} as {new_user['role']}",
+            "details": f"Admin {admin.user_id} ({admin.role}) onboarded new employee {generated_user_id} / {username} ({new_user['full_name']}) in {new_user['department']} as {new_user['role']}",
             "timestamp": now
         })
         return {
             "status": "success",
-            "message": f"User {request.user_id} onboarded. Temp password: TempPass@123",
+            "message": f"User {username} onboarded. Temp password: {DEFAULT_GITLAB_TEMP_PASSWORD}",
+            "user_id": generated_user_id,
+            "username": username,
             "gitlab_sync": gitlab_sync.as_dict(),
         }
 

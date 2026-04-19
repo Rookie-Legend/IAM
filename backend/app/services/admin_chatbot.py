@@ -10,7 +10,7 @@ from app.core.security import get_password_hash
 from app.api.vpn import revoke_vpn
 from app.rag.rag_engine import rag_answer
 from app.services.email_service import send_email
-from app.services.gitlab_sync import block_gitlab_user, ensure_gitlab_user, unblock_gitlab_user
+from app.services.gitlab_sync import DEFAULT_GITLAB_TEMP_PASSWORD, block_gitlab_user, ensure_gitlab_user, unblock_gitlab_user
 
 _client = None
 
@@ -443,18 +443,16 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 f"({hint})"
             )
 
-        # ── Gate 5: Generate or validate user_id ──
+        # ── Gate 5: Generate internal user_id and validate username ──
         provided_user_id = entities.get("user_id")
-        if provided_user_id:
-            user_id = provided_user_id
-        else:
-            user_id = await generate_user_id(db, dept)
+        user_id = await generate_user_id(db, dept)
+        username = provided_user_id or user_id
 
         # ── Gate 6: Username uniqueness check ──
         existing_by_id = await db["users"].find_one({"user_id": user_id})
-        existing_by_username = await db["users"].find_one({"username": user_id})
+        existing_by_username = await db["users"].find_one({"username": username})
         if existing_by_id or existing_by_username:
-            base = user_id
+            base = username
             suffix = 2
             while await db["users"].find_one({"$or": [{"user_id": f"{base}_{suffix}"}, {"username": f"{base}_{suffix}"}]}):
                 suffix += 1
@@ -490,17 +488,17 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         # ── All checks passed — create the user ──
         new_user = {
             "user_id": user_id,
-            "username": user_id,
+            "username": username,
             "email": email,
             "full_name": name,
             "department": dept,
             "role": role,
             "status": "inactive",
             "disabled": False,
-            "hashed_password": get_password_hash("TempPass@123")
+            "hashed_password": get_password_hash(DEFAULT_GITLAB_TEMP_PASSWORD)
         }
         await db["users"].insert_one(new_user)
-        gitlab_sync = await ensure_gitlab_user(new_user, "TempPass@123")
+        gitlab_sync = await ensure_gitlab_user(new_user, DEFAULT_GITLAB_TEMP_PASSWORD)
         await db["access_states"].insert_one({
             "user_id": user_id,
             "vpn_access": [],
@@ -520,11 +518,12 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         return (
             f"✅ **{name}** has been successfully onboarded!\n\n"
             f"- **User ID:** {user_id}\n"
+            f"- **Username:** {username}\n"
             f"- **GitLab sync:** {gitlab_sync.status}\n"
             f"- **Department:** {dept}\n"
             f"- **Role:** {role}\n"
             f"- **Email:** {email}\n"
-            f"- **Temp Password:** `TempPass@123`\n\n"
+            f"- **Temp Password:** `{DEFAULT_GITLAB_TEMP_PASSWORD}`\n\n"
             f"Welcome to the team, {name.split()[0]}! 🎉"
         )
 
@@ -925,6 +924,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 continue
 
             user_id = await generate_user_id(db, dept)
+            username = emp.get("username") or user_id
             email = emp.get("email") or f"{name.lower().replace(' ', '.')}@company.com"
             role = emp.get("role") or None
 
@@ -932,9 +932,14 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 results.append(f"⚠️ {name} — skipped: role not specified")
                 continue
 
+            existing_user = await db["users"].find_one({"$or": [{"user_id": user_id}, {"username": username}]})
+            if existing_user:
+                results.append(f"⚠️ {name} — skipped: username {username} already exists")
+                continue
+
             new_user = {
                 "user_id": user_id,
-                "username": user_id,
+                "username": username,
                 "email": email,
                 "full_name": name,
                 "department": dept,
@@ -942,10 +947,10 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 "status": "inactive",
                 "disabled": False,
     
-                "hashed_password": get_password_hash("TempPass@123")
+                "hashed_password": get_password_hash(DEFAULT_GITLAB_TEMP_PASSWORD)
             }
             await db["users"].insert_one(new_user)
-            gitlab_sync = await ensure_gitlab_user(new_user, "TempPass@123")
+            gitlab_sync = await ensure_gitlab_user(new_user, DEFAULT_GITLAB_TEMP_PASSWORD)
             await db["access_states"].insert_one({
                 "user_id": user_id,
                 "vpn_access": [],
@@ -962,7 +967,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 "details": f"{name} ({user_id}) joined the {dept} department as {role} via bulk onboarding. Email: {email}.",
                 "timestamp": datetime.utcnow()
             })
-            results.append(f"✅ {name} ({user_id}) -> {dept} / GitLab: {gitlab_sync.status}")
+            results.append(f"✅ {name} ({user_id}, username: {username}) -> {dept} / GitLab: {gitlab_sync.status}")
 
         return (
             f"**Bulk Onboarding Complete — {len(employees)} employees**\n\n"

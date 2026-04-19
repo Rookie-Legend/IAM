@@ -53,7 +53,7 @@ async def register(user_in: UserCreate, db=Depends(get_database)):
         raise HTTPException(status_code=400, detail="Username or email already exists")
     hashed = get_password_hash(user_in.password)
     user_dict = user_in.model_dump(exclude={"password"})
-    user_dict["user_id"] = user_in.username
+    user_dict["user_id"] = await generate_user_id(db, user_in.department)
     user_dict["hashed_password"] = hashed
     await db["users"].insert_one(user_dict)
     gitlab_sync = await ensure_gitlab_user(user_dict, user_in.password)
@@ -246,7 +246,10 @@ async def complete_password_reset(request: CompletePasswordResetRequest, db=Depe
 
     await db["users"].update_one(
         {"user_id": user["user_id"]},
-        {"$set": {"hashed_password": get_password_hash(request.password)}},
+        {"$set": {
+            "hashed_password": get_password_hash(request.password),
+            "gitlab_temp_password_set": False,
+        }},
     )
     gitlab_sync = await update_gitlab_password(user, request.password)
     await db["otp_store"].delete_one({"user_id": reset_otp_key(user["user_id"])})
