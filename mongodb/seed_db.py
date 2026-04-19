@@ -414,7 +414,7 @@ async def seed_db():
     await db.vpn_ip_pools.insert_many(vpn_ip_pools_data)
     print("Seeded VPN IP Pools")
 
-    await db.vpn_sessions.create_index("user_id")
+    await db.vpn_sessions.create_index("user_id", unique=True)
     await db.vpn_sessions.create_index("is_active")
     await db.vpn_events.create_index("timestamp")
     await db.vpn_events.create_index("user_id")

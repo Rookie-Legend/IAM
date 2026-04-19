@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from datetime import datetime
 import subprocess, os, socket, uuid
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import OperationFailure
 
 app = FastAPI()
 
@@ -24,6 +25,42 @@ def get_db():
     if _mongo_client is None:
         _mongo_client = AsyncIOMotorClient(MONGO_URL)
     return _mongo_client[DB_NAME]
+
+def _session_sort_key(session):
+    return (
+        1 if session.get("is_active") else 0,
+        session.get("last_activity") or session.get("connected_at") or datetime.min,
+        str(session.get("_id"))
+    )
+
+async def ensure_unique_vpn_sessions(db):
+    cursor = db.vpn_sessions.find({})
+    sessions = await cursor.to_list(length=10000)
+    by_user = {}
+    for session in sessions:
+        user_id = session.get("user_id")
+        if not user_id:
+            continue
+        by_user.setdefault(user_id, []).append(session)
+
+    for user_sessions in by_user.values():
+        if len(user_sessions) <= 1:
+            continue
+        keep = max(user_sessions, key=_session_sort_key)
+        remove_ids = [session["_id"] for session in user_sessions if session["_id"] != keep["_id"]]
+        if remove_ids:
+            await db.vpn_sessions.delete_many({"_id": {"$in": remove_ids}})
+
+    try:
+        await db.vpn_sessions.drop_index("user_id_1")
+    except OperationFailure:
+        pass
+    await db.vpn_sessions.create_index("user_id", unique=True)
+    await db.vpn_sessions.create_index("is_active")
+
+@app.on_event("startup")
+async def startup():
+    await ensure_unique_vpn_sessions(get_db())
 
 def run_cmd(cmd):
     subprocess.run(cmd, cwd=EASYRSA_DIR, shell=True, check=True, env={**os.environ, "EASYRSA_BATCH": "1"})
@@ -105,8 +142,10 @@ async def release_ip_by_username(db, username):
     if not session:
         return None
     
-    ip = session["assigned_ip"]
-    vpn_id = session["vpn_id"]
+    ip = session.get("assigned_ip") or session.get("vpn_ip")
+    vpn_id = session.get("vpn_id")
+    if not ip or not vpn_id:
+        return None
     
     await db.vpn_ip_pools.update_one(
         {"pool_id": vpn_id},
@@ -321,6 +360,7 @@ async def revoke_user(username: str):
                 "connected": False,
                 "connected_vpn": None,
                 "connected_ip": None,
+                "connected_at": None,
                 "last_disconnected_at": datetime.utcnow()
             }}
         )
@@ -333,13 +373,18 @@ async def revoke_user(username: str):
 async def release_ip_endpoint(request: ReleaseIPRequest):
     db = get_db()
     try:
-        resolved_username, _ = await resolve_session_identity(db, request.username, request.vpn_ip)
+        resolved_username, session = await resolve_session_identity(db, request.username, request.vpn_ip)
         released = await release_ip_by_username(db, resolved_username)
         
         if released:
             await db.vpn_sessions.update_one(
-                {"user_id": resolved_username, "is_active": True},
-                {"$set": {"is_active": False, "assigned_ip": None, "last_activity": datetime.utcnow()}}
+                {"_id": session["_id"]} if session else {"user_id": resolved_username, "is_active": True},
+                {"$set": {
+                    "is_active": False,
+                    "assigned_ip": None,
+                    "connected_at": None,
+                    "last_activity": datetime.utcnow()
+                }}
             )
             
             await db.access_states.update_one(
@@ -348,6 +393,7 @@ async def release_ip_endpoint(request: ReleaseIPRequest):
                     "connected": False,
                     "connected_vpn": None,
                     "connected_ip": None,
+                    "connected_at": None,
                     "last_disconnected_at": datetime.utcnow()
                 }}
             )
@@ -368,6 +414,44 @@ async def release_ip_endpoint(request: ReleaseIPRequest):
             )
             
             return {"status": "success", "message": f"IP {released['ip']} released for {resolved_username}"}
+
+        if resolved_username and not is_temp_openvpn_username(resolved_username):
+            await db.vpn_sessions.update_many(
+                {"user_id": resolved_username, "is_active": True},
+                {"$set": {
+                    "is_active": False,
+                    "connected_at": None,
+                    "last_activity": datetime.utcnow()
+                }}
+            )
+
+            await db.access_states.update_one(
+                {"user_id": resolved_username},
+                {"$set": {
+                    "connected": False,
+                    "connected_vpn": None,
+                    "connected_ip": None,
+                    "connected_at": None,
+                    "last_disconnected_at": datetime.utcnow()
+                }}
+            )
+
+            await db.users.update_one(
+                {"user_id": resolved_username, "disabled": {"$ne": True}},
+                {"$set": {"status": "inactive"}}
+            )
+
+            await insert_vpn_event(
+                db,
+                "disconnect",
+                resolved_username,
+                vpn_ip=request.vpn_ip,
+                source_ip=request.source_ip,
+                vpn_id=session.get("vpn_id", "") if session else "",
+                details="Disconnected"
+            )
+
+            return {"status": "success", "message": f"Marked {resolved_username} disconnected"}
         
         return {"status": "success", "message": "No active session found"}
     except Exception as e:
@@ -396,29 +480,29 @@ async def connect_event(request: ConnectEventRequest):
             if pool:
                 vpn_id = pool["pool_id"]
 
-        if session:
-            await db.vpn_sessions.update_one(
-                {"user_id": resolved_username},
-                {"$set": {
-                    "is_active": True,
-                    "vpn_ip": request.vpn_ip,
-                    "source_ip": request.source_ip,
-                    "connected_at": datetime.utcnow(),
-                    "last_activity": datetime.utcnow()
-                }}
-            )
-        else:
-            await db.vpn_sessions.insert_one({
+        session_payload = {
+            "vpn_id": vpn_id,
+            "assigned_ip": request.vpn_ip,
+            "vpn_ip": request.vpn_ip,
+            "source_ip": request.source_ip,
+            "connected_at": datetime.utcnow(),
+            "last_activity": datetime.utcnow(),
+            "is_active": True
+        }
+        if not session:
+            session_payload.update({
                 "session_id": str(uuid.uuid4()),
-                "user_id": resolved_username,
-                "vpn_id": vpn_id,
                 "assigned_ip": request.vpn_ip,
-                "vpn_ip": request.vpn_ip,
-                "source_ip": request.source_ip,
-                "connected_at": datetime.utcnow(),
-                "last_activity": datetime.utcnow(),
-                "is_active": True
             })
+
+        await db.vpn_sessions.update_one(
+            {"user_id": resolved_username},
+            {
+                "$set": session_payload,
+                "$setOnInsert": {"user_id": resolved_username}
+            },
+            upsert=True
+        )
 
         await db.access_states.update_one(
             {"user_id": resolved_username},

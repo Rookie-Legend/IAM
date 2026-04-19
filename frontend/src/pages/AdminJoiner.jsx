@@ -152,7 +152,7 @@ const AdminJoiner = ({ token }) => {
             </div>
 
             <p className="text-[12px] text-text-muted bg-elevated px-3 py-2 rounded-md border border-border">
-              ℹ️ Temp password will be <code className="font-mono">TempPass@123</code>. The user should change it on first login.
+              ℹ️ Temp password will be <code className="font-mono">Q9@vR4#xT7!mZ2$p</code>. The user should change it on first login.
             </p>
 
             <button

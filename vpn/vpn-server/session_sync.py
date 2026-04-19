@@ -5,11 +5,13 @@ import os
 import asyncio
 from datetime import datetime
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import OperationFailure
 
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://mongodb:27017")
 DB_NAME = os.environ.get("DATABASE_NAME", "iam_db")
 MGMT_PORT = 7505
 STATUS_LOG_PATH = "/var/log/openvpn/status.log"
+_indexes_ready = False
 
 def is_temp_openvpn_username(value):
     return bool(value) and value.startswith("/tmp/openvpn_cc_")
@@ -19,6 +21,43 @@ def _parse_datetime_to_epoch(value):
         return int(datetime.strptime(value, "%Y-%m-%d %H:%M:%S").timestamp())
     except Exception:
         return 0
+
+def _session_sort_key(session):
+    return (
+        1 if session.get("is_active") else 0,
+        session.get("last_activity") or session.get("connected_at") or datetime.min,
+        str(session.get("_id"))
+    )
+
+async def ensure_unique_vpn_sessions(db):
+    global _indexes_ready
+    if _indexes_ready:
+        return
+
+    cursor = db.vpn_sessions.find({})
+    sessions = await cursor.to_list(length=10000)
+    by_user = {}
+    for session in sessions:
+        user_id = session.get("user_id")
+        if not user_id:
+            continue
+        by_user.setdefault(user_id, []).append(session)
+
+    for user_sessions in by_user.values():
+        if len(user_sessions) <= 1:
+            continue
+        keep = max(user_sessions, key=_session_sort_key)
+        remove_ids = [session["_id"] for session in user_sessions if session["_id"] != keep["_id"]]
+        if remove_ids:
+            await db.vpn_sessions.delete_many({"_id": {"$in": remove_ids}})
+
+    try:
+        await db.vpn_sessions.drop_index("user_id_1")
+    except OperationFailure:
+        pass
+    await db.vpn_sessions.create_index("user_id", unique=True)
+    await db.vpn_sessions.create_index("is_active")
+    _indexes_ready = True
 
 async def insert_vpn_event(db, event_type, user_id, vpn_ip="", source_ip="", vpn_id="", details="", timestamp=None):
     event_time = timestamp or datetime.utcnow()
@@ -101,6 +140,7 @@ def query_openvpn_status():
 async def sync_sessions():
     client = AsyncIOMotorClient(MONGO_URL)
     db = client[DB_NAME]
+    await ensure_unique_vpn_sessions(db)
 
     active_sessions = query_openvpn_status()
     active_usernames = {c['username'] for c in active_sessions if c.get('username')}
@@ -117,7 +157,11 @@ async def sync_sessions():
         ):
             await db.vpn_sessions.update_one(
                 {"_id": session['_id']},
-                {"$set": {"is_active": False, "last_activity": datetime.utcnow()}}
+                {"$set": {
+                    "is_active": False,
+                    "connected_at": None,
+                    "last_activity": datetime.utcnow()
+                }}
             )
 
             await db.access_states.update_one(
@@ -126,6 +170,7 @@ async def sync_sessions():
                     "connected": False,
                     "connected_vpn": None,
                     "connected_ip": None,
+                    "connected_at": None,
                     "last_disconnected_at": datetime.utcnow()
                 }}
             )
@@ -151,8 +196,7 @@ async def sync_sessions():
 
         if username and not is_temp_openvpn_username(username):
             existing = await db.vpn_sessions.find_one({
-                "user_id": username,
-                "is_active": True
+                "user_id": username
             })
 
         if not existing and client_data.get('vpn_ip'):
@@ -177,6 +221,7 @@ async def sync_sessions():
                 {"$set": {
                     "user_id": resolved_username,
                     "is_active": True,
+                    "assigned_ip": client_data['vpn_ip'],
                     "vpn_ip": client_data['vpn_ip'],
                     "source_ip": client_data['source_ip'],
                     "connected_at": existing.get("connected_at") or datetime.utcnow(),
@@ -185,17 +230,19 @@ async def sync_sessions():
             )
         else:
             await db.vpn_sessions.update_one(
-                {"user_id": resolved_username, "is_active": True},
-                {"$set": {
-                    "user_id": resolved_username,
-                    "is_active": True,
-                    "vpn_ip": client_data['vpn_ip'],
-                    "source_ip": client_data['source_ip'],
-                    "assigned_ip": client_data['vpn_ip'],
-                    "vpn_id": vpn_id,
-                    "connected_at": datetime.utcnow(),
-                    "last_activity": datetime.utcnow()
-                }},
+                {"user_id": resolved_username},
+                {
+                    "$set": {
+                        "is_active": True,
+                        "vpn_ip": client_data['vpn_ip'],
+                        "source_ip": client_data['source_ip'],
+                        "assigned_ip": client_data['vpn_ip'],
+                        "vpn_id": vpn_id,
+                        "connected_at": datetime.utcnow(),
+                        "last_activity": datetime.utcnow()
+                    },
+                    "$setOnInsert": {"user_id": resolved_username}
+                },
                 upsert=True
             )
 

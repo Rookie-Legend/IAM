@@ -1,7 +1,11 @@
 gitlab deploying
 curl -X POST http://localhost:8000/api/auth/login     -H "Content-Type: application/x-www-form-urlencoded"     -d "username=admin&password=admin_pass"
 curl -X POST http://localhost:8000/api/admin/gitlab-sync \
-    -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJTMTAwMSIsImV4cCI6MTc3NjYwNDgwNn0.k2Rb7dVKATbe7aerO5YJxZKw96TC8j4NdDbDz13Q2wE"
+    -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJTMTAwMSIsImV4cCI6MTc3NjYxMTAxM30.VF099_IVxKQz4Me_Y6nVpOCUh1vhYowgZeoU-hfGe3s"
 
 sudo resolvectl dns tun0 100.64.0.1\
 resolvectl query gitlab.eng.vpn
+
+curl -s \
+    -H "PRIVATE-TOKEN: glpat-6UsAD0WMUjgnq9lZWQsAt286MQp1OjEH.01.0w04s1p3t" \
+    http://gitlab.eng.vpn/api/v4/user
