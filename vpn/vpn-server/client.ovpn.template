@@ -2,6 +2,8 @@ client
 dev tun
 proto udp
 remote YOUR_SERVER_IP 1194
+dhcp-option DNS 100.64.0.1
+dhcp-option DOMAIN eng.vpn
 resolv-retry infinite
 nobind
 persist-key

@@ -4,6 +4,7 @@ from app.core.database import get_database
 from app.api.dependencies import get_current_admin
 from app.services.user_status import apply_user_status
 from app.services.vpn_catalog import resolve_vpn_request
+from app.services.gitlab_sync import backfill_gitlab_users, block_gitlab_user, unblock_gitlab_user
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
@@ -59,7 +60,12 @@ async def disable_user(user_id: str, db=Depends(get_database), admin=Depends(get
         "details": f"Admin {admin.user_id} ({admin.role}) disabled user {user_id} ({user.get('full_name', '')}) from department {user.get('department', '')}",
         "timestamp": datetime.utcnow()
     })
-    return {"status": "success", "message": f"User {user_id} has been disabled"}
+    gitlab_sync = await block_gitlab_user(user)
+    return {
+        "status": "success",
+        "message": f"User {user_id} has been disabled",
+        "gitlab_sync": gitlab_sync.as_dict(),
+    }
 
 @router.post("/users/{user_id}/reinstate")
 async def reinstate_user(user_id: str, db=Depends(get_database), admin=Depends(get_current_admin)):
@@ -77,7 +83,12 @@ async def reinstate_user(user_id: str, db=Depends(get_database), admin=Depends(g
         "details": f"Admin {admin.user_id} ({admin.role}) reinstated user {user_id} ({user.get('full_name', '')}) - previously disabled",
         "timestamp": datetime.utcnow()
     })
-    return {"status": "success", "message": f"User {user_id} has been reinstated"}
+    gitlab_sync = await unblock_gitlab_user(user)
+    return {
+        "status": "success",
+        "message": f"User {user_id} has been reinstated",
+        "gitlab_sync": gitlab_sync.as_dict(),
+    }
 
 @router.post("/users/{user_id}/offboard")
 async def offboard_user(user_id: str, db=Depends(get_database), admin=Depends(get_current_admin)):
@@ -103,7 +114,25 @@ async def offboard_user(user_id: str, db=Depends(get_database), admin=Depends(ge
         "details": f"Admin {admin.user_id} ({admin.role}) offboarded user {user_id} ({user.get('full_name', '')}) from department {user.get('department', '')}. All access revoked.",
         "timestamp": datetime.utcnow()
     })
-    return {"status": "success", "message": f"User {user_id} has been offboarded and all access revoked"}
+    gitlab_sync = await block_gitlab_user(user)
+    return {
+        "status": "success",
+        "message": f"User {user_id} has been offboarded and all access revoked",
+        "gitlab_sync": gitlab_sync.as_dict(),
+    }
+
+@router.post("/gitlab-sync")
+async def sync_gitlab_users(db=Depends(get_database), admin=Depends(get_current_admin)):
+    users = await db["users"].find({}).to_list(length=1000)
+    summary = await backfill_gitlab_users(users)
+    await db["audit_logs"].insert_one({
+        "user_id": admin.user_id,
+        "action": "gitlab_sync",
+        "target_resource": "gitlab",
+        "details": f"Admin {admin.user_id} ran GitLab backfill sync: {summary}",
+        "timestamp": datetime.utcnow()
+    })
+    return {"status": "success", "summary": summary}
 
 @router.get("/access-requests")
 async def get_access_requests(db=Depends(get_database), admin=Depends(get_current_admin)):

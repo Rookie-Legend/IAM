@@ -1,5 +1,5 @@
 FROM python:3.11-slim
-RUN apt-get update && apt-get install -y openvpn easy-rsa netcat-traditional iptables iproute2 nano curl procps tzdata && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y openvpn easy-rsa netcat-traditional iptables iproute2 nano curl procps tzdata dnsmasq && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

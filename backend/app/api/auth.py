@@ -8,6 +8,7 @@ from app.core.database import get_database
 from app.core.security import verify_password, create_access_token, get_password_hash
 from app.models.user import UserCreate
 from app.services.email_service import send_email
+from app.services.gitlab_sync import ensure_gitlab_user, update_gitlab_password
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -55,6 +56,7 @@ async def register(user_in: UserCreate, db=Depends(get_database)):
     user_dict["user_id"] = user_in.username
     user_dict["hashed_password"] = hashed
     await db["users"].insert_one(user_dict)
+    gitlab_sync = await ensure_gitlab_user(user_dict, user_in.password)
     await db["access_states"].insert_one({
         "user_id": user_dict["user_id"],
         "vpn_access": [],
@@ -64,7 +66,11 @@ async def register(user_in: UserCreate, db=Depends(get_database)):
         "connected_at": None,
         "last_disconnected_at": None
     })
-    return {"status": "success", "message": "User registered successfully"}
+    return {
+        "status": "success",
+        "message": "User registered successfully",
+        "gitlab_sync": gitlab_sync.as_dict(),
+    }
 
 class VerifyTokenRequest(BaseModel):
     token: str
@@ -242,8 +248,13 @@ async def complete_password_reset(request: CompletePasswordResetRequest, db=Depe
         {"user_id": user["user_id"]},
         {"$set": {"hashed_password": get_password_hash(request.password)}},
     )
+    gitlab_sync = await update_gitlab_password(user, request.password)
     await db["otp_store"].delete_one({"user_id": reset_otp_key(user["user_id"])})
-    return {"status": "success", "message": "Password reset successfully"}
+    return {
+        "status": "success",
+        "message": "Password reset successfully",
+        "gitlab_sync": gitlab_sync.as_dict(),
+    }
 
 
 @router.post("/complete-registration")
@@ -274,6 +285,7 @@ async def complete_registration(request: CompleteRegistrationRequest, db=Depends
         "hashed_password": hashed
     }
     await db["users"].insert_one(user_dict)
+    gitlab_sync = await ensure_gitlab_user(user_dict, request.password)
     await db["access_states"].insert_one({
         "user_id": new_user_id,
         "vpn_access": [],
@@ -287,4 +299,8 @@ async def complete_registration(request: CompleteRegistrationRequest, db=Depends
     await db["invites"].update_one({"token": request.token}, {"$set": {"status": "completed"}})
     await db["otp_store"].delete_one({"user_id": f"invite_{request.token}"})
 
-    return {"status": "success", "message": "Registration completed successfully. You can now login."}
+    return {
+        "status": "success",
+        "message": "Registration completed successfully. You can now login.",
+        "gitlab_sync": gitlab_sync.as_dict(),
+    }

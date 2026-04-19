@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     GROQ_API_KEY: Optional[str] = None
     VPN_SERVER_URL: str = "http://vpn-server:4000"
     FRONTEND_URL: str = "http://localhost:5173"
+    GITLAB_URL: str = "http://172.30.0.50"
+    GITLAB_ADMIN_TOKEN: str = ""
+    GITLAB_SYNC_ENABLED: bool = False
 
     class Config:
         env_file = ".env"

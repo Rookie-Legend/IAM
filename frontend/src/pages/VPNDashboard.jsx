@@ -7,6 +7,8 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
     const [vpns, setVpns] = useState([]);
     const [loadingVpn, setLoadingVpn] = useState(null);
     const [switchModal, setSwitchModal] = useState({ open: false, vpnId: null });
+    const [revokeModalOpen, setRevokeModalOpen] = useState(false);
+    const [revokeMessage, setRevokeMessage] = useState(null);
     const [vpnStatus, setVpnStatus] = useState({
         has_provisioned: false,
         provisioned_vpn: null,
@@ -155,6 +157,22 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
         setSwitchModal({ open: false, vpnId: null });
     };
 
+    const openRevokeModal = () => {
+        setRevokeMessage(null);
+        setRevokeModalOpen(true);
+    };
+
+    const closeRevokeModal = () => {
+        if (loadingVpn !== null) {
+            return;
+        }
+        setRevokeModalOpen(false);
+    };
+
+    const showRevokeMessage = (type, text) => {
+        setRevokeMessage({ type, text });
+    };
+
     const handleSwitch = async (vpnId) => {
         setLoadingVpn(vpnId);
         try {
@@ -188,10 +206,6 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
     };
 
     const handleRevokeConfig = async () => {
-        if (!confirm(`Are you sure you want to revoke your current VPN config? Your approved VPN access will remain available so you can provision another profile.`)) {
-            return;
-        }
-        
         setLoadingVpn('revoke');
         try {
             const res = await fetch(apiUrl('/api/vpn/disconnect'), {
@@ -209,13 +223,14 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
                 });
                 await refreshVpnData();
                 setVpnMark(null);
-                alert('VPN config has been revoked.');
+                setRevokeModalOpen(false);
+                showRevokeMessage('success', 'VPN config revoked. Your approved access is still available.');
             } else {
                 const data = await res.json();
-                alert(data.detail || 'Failed to revoke VPN config');
+                showRevokeMessage('error', data.detail || 'Failed to revoke VPN config');
             }
         } catch (err) {
-            alert('Failed to revoke VPN config');
+            showRevokeMessage('error', 'Failed to revoke VPN config');
         } finally {
             setLoadingVpn(null);
         }
@@ -314,7 +329,7 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
 
                     {vpnStatus.has_provisioned && (
                         <button
-                            onClick={handleRevokeConfig}
+                            onClick={openRevokeModal}
                             disabled={loadingVpn !== null}
                             className="w-full mt-4 py-2.5 px-4 bg-error/10 border border-error/30 text-error rounded-xl text-sm font-semibold hover:bg-error/20 transition-all flex items-center justify-center gap-2"
                         >
@@ -323,6 +338,18 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
                         </button>
                     )}
                 </div>
+
+                {revokeMessage && (
+                    <div
+                        className={`mb-4 rounded-xl border px-4 py-3 text-left text-sm ${
+                            revokeMessage.type === 'success'
+                                ? 'border-success/30 bg-success/10 text-success'
+                                : 'border-error/30 bg-error/10 text-error'
+                        }`}
+                    >
+                        {revokeMessage.text}
+                    </div>
+                )}
 
                 <p className="text-[11px] text-text-muted/50">* Access is governed by CorpOD IAM policies</p>
             </div>
@@ -356,6 +383,57 @@ const VPNDashboard = ({ user, token, setVpnMark, vpnMark }) => {
                                 className="rounded-xl bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-blue-600 disabled:opacity-50"
                             >
                                 {loadingVpn === switchModal.vpnId ? 'Switching...' : 'Confirm Switch'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {revokeModalOpen && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm p-4"
+                    style={{ backgroundColor: 'var(--color-overlay)' }}
+                    onClick={closeRevokeModal}
+                >
+                    <div
+                        className="w-full max-w-md rounded-2xl border border-border-subtle bg-surface p-6 text-left shadow-xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="mb-4 flex items-center gap-3">
+                            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-error/10 text-error">
+                                <FontAwesomeIcon icon={faBan} className="text-sm" />
+                            </div>
+                            <div>
+                                <h3 className="text-lg font-bold text-text">Revoke VPN Config</h3>
+                                <p className="text-xs text-text-muted">Your IAM permission will remain active.</p>
+                            </div>
+                        </div>
+
+                        <p className="text-sm leading-6 text-text-muted">
+                            This removes the current generated VPN profile and disconnects the active session if one exists.
+                            You can provision another approved VPN profile after this completes.
+                        </p>
+
+                        {revokeMessage?.type === 'error' && (
+                            <div className="mt-4 rounded-xl border border-error/30 bg-error/10 px-4 py-3 text-sm text-error">
+                                {revokeMessage.text}
+                            </div>
+                        )}
+
+                        <div className="mt-6 flex justify-end gap-3">
+                            <button
+                                onClick={closeRevokeModal}
+                                disabled={loadingVpn !== null}
+                                className="rounded-xl border border-border-subtle px-4 py-2 text-sm font-semibold text-text-muted transition-all hover:bg-hover disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleRevokeConfig}
+                                disabled={loadingVpn !== null}
+                                className="rounded-xl bg-error px-4 py-2 text-sm font-semibold text-white transition-all hover:opacity-90 disabled:opacity-50"
+                            >
+                                {loadingVpn === 'revoke' ? 'Revoking...' : 'Revoke Config'}
                             </button>
                         </div>
                     </div>

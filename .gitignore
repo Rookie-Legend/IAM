@@ -103,5 +103,5 @@ docs/
 .agent
 
 *.pdf
-
+test
 msmtprc

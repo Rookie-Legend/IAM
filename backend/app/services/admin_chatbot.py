@@ -10,6 +10,7 @@ from app.core.security import get_password_hash
 from app.api.vpn import revoke_vpn
 from app.rag.rag_engine import rag_answer
 from app.services.email_service import send_email
+from app.services.gitlab_sync import block_gitlab_user, ensure_gitlab_user, unblock_gitlab_user
 
 _client = None
 
@@ -499,6 +500,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             "hashed_password": get_password_hash("TempPass@123")
         }
         await db["users"].insert_one(new_user)
+        gitlab_sync = await ensure_gitlab_user(new_user, "TempPass@123")
         await db["access_states"].insert_one({
             "user_id": user_id,
             "vpn_access": [],
@@ -518,6 +520,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
         return (
             f"✅ **{name}** has been successfully onboarded!\n\n"
             f"- **User ID:** {user_id}\n"
+            f"- **GitLab sync:** {gitlab_sync.status}\n"
             f"- **Department:** {dept}\n"
             f"- **Role:** {role}\n"
             f"- **Email:** {email}\n"
@@ -825,10 +828,12 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             "details": f"{user.get('full_name', user_id)} ({user_id}) from {user.get('department', 'unknown')} department ({user.get('role', 'unknown')}) was offboarded. All access revoked and account disabled.",
             "timestamp": datetime.utcnow()
         })
+        gitlab_sync = await block_gitlab_user(user)
         return (
             f"✅ **{user.get('full_name', user_id)}** has been offboarded.\n\n"
             f"- **Account:** Disabled\n"
             f"- **Access revoked:** all\n\n"
+            f"- **GitLab sync:** {gitlab_sync.status}\n\n"
             f"All systems access has been terminated. 🔒"
         )
 
@@ -861,10 +866,12 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             "details": f"{user.get('full_name', user_id)} ({user_id}) from {user.get('department', 'unknown')} department ({user.get('role', 'unknown')}) was temporarily disabled. Account suspended and access blocked.",
             "timestamp": datetime.utcnow()
         })
+        gitlab_sync = await block_gitlab_user(user)
         return (
             f"✅ **{user.get('full_name', user_id)}** has been disabled.\n\n"
             f"- **Account:** Temporarily suspended\n"
             f"- **Access:** Blocked\n\n"
+            f"- **GitLab sync:** {gitlab_sync.status}\n\n"
             f"Use 'reinstate' to re-enable this user later. 🔐"
         )
 
@@ -889,10 +896,12 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
             "details": f"{user.get('full_name', user_id)} ({user_id}) from {user.get('department', 'unknown')} department ({user.get('role', 'unknown')}) was reinstated. Account re-enabled and set to active.",
             "timestamp": datetime.utcnow()
         })
+        gitlab_sync = await unblock_gitlab_user(user)
         return (
             f"✅ **{user.get('full_name', user_id)}** has been reinstated!\n\n"
             f"- **Account:** Active\n"
-            f"- **Department:** {user.get('department')}"
+            f"- **Department:** {user.get('department')}\n"
+            f"- **GitLab sync:** {gitlab_sync.status}"
         )
 
     elif intent == "bulk_joiner":
@@ -936,6 +945,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 "hashed_password": get_password_hash("TempPass@123")
             }
             await db["users"].insert_one(new_user)
+            gitlab_sync = await ensure_gitlab_user(new_user, "TempPass@123")
             await db["access_states"].insert_one({
                 "user_id": user_id,
                 "vpn_access": [],
@@ -952,7 +962,7 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 "details": f"{name} ({user_id}) joined the {dept} department as {role} via bulk onboarding. Email: {email}.",
                 "timestamp": datetime.utcnow()
             })
-            results.append(f"✅ {name} ({user_id}) -> {dept}")
+            results.append(f"✅ {name} ({user_id}) -> {dept} / GitLab: {gitlab_sync.status}")
 
         return (
             f"**Bulk Onboarding Complete — {len(employees)} employees**\n\n"
@@ -986,7 +996,8 @@ async def execute_admin_intent(intent_data: dict, db) -> str:
                 "details": f"{user.get('full_name', uid)} ({uid}) from {user.get('department', 'unknown')} department ({user.get('role', 'unknown')}) was offboarded via bulk operation. All access revoked.",
                 "timestamp": datetime.utcnow()
             })
-            results.append(f"✅ {uid} — offboarded")
+            gitlab_sync = await block_gitlab_user(user)
+            results.append(f"✅ {uid} — offboarded / GitLab: {gitlab_sync.status}")
 
         return (
             f"**Bulk Offboarding Complete — {len(user_ids)} users**\n\n"

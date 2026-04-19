@@ -9,6 +9,7 @@ from app.api.dependencies import get_current_admin
 from app.api.vpn import revoke_vpn
 from app.services.email_service import send_email
 from app.core.config import settings
+from app.services.gitlab_sync import block_gitlab_user, ensure_gitlab_user, unblock_gitlab_user
 
 router = APIRouter(prefix="/api/jml", tags=["JML"])
 
@@ -81,6 +82,7 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
             "hashed_password": get_password_hash("TempPass@123")
         }
         await db["users"].insert_one(new_user)
+        gitlab_sync = await ensure_gitlab_user(new_user, "TempPass@123")
         await db["access_states"].insert_one({
             "user_id": request.user_id,
             "vpn_access": [],
@@ -98,7 +100,11 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
             "details": f"Admin {admin.user_id} ({admin.role}) onboarded new employee {request.user_id} ({new_user['full_name']}) in {new_user['department']} as {new_user['role']}",
             "timestamp": now
         })
-        return {"status": "success", "message": f"User {request.user_id} onboarded. Temp password: TempPass@123"}
+        return {
+            "status": "success",
+            "message": f"User {request.user_id} onboarded. Temp password: TempPass@123",
+            "gitlab_sync": gitlab_sync.as_dict(),
+        }
 
     elif request.event_type == "leaver":
         user = await db["users"].find_one({"user_id": request.user_id})
@@ -123,7 +129,12 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
             await revoke_vpn(user_id=request.user_id, db=db, admin=admin)
         except Exception:
             pass
-        return {"status": "success", "message": f"User {request.user_id} offboarded and disabled"}
+        gitlab_sync = await block_gitlab_user(user or {"user_id": request.user_id})
+        return {
+            "status": "success",
+            "message": f"User {request.user_id} offboarded and disabled",
+            "gitlab_sync": gitlab_sync.as_dict(),
+        }
 
     elif request.event_type == "mover":
         user = await db["users"].find_one({"user_id": request.user_id})
@@ -169,6 +180,11 @@ async def process_jml_event(request: JMLEventRequest, db=Depends(get_database), 
             "details": f"Admin {admin.user_id} ({admin.role}) reinstated user {request.user_id} ({user.get('full_name', '') if user else ''}) - previously disabled. Account is now active.",
             "timestamp": now
         })
-        return {"status": "success", "message": f"User {request.user_id} reinstated"}
+        gitlab_sync = await unblock_gitlab_user(user or {"user_id": request.user_id})
+        return {
+            "status": "success",
+            "message": f"User {request.user_id} reinstated",
+            "gitlab_sync": gitlab_sync.as_dict(),
+        }
 
     raise HTTPException(status_code=400, detail=f"Unknown event type: {request.event_type}")

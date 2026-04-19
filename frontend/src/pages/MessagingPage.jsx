@@ -5,10 +5,12 @@ import {
   faComments,
   faPen,
   faPaperPlane,
+  faPhone,
   faSearch,
   faSpinner,
   faTrash,
   faUsers,
+  faVideo,
 } from '@fortawesome/free-solid-svg-icons';
 import { apiUrl } from '../stores/configStore';
 import './MessagingPage.css';
@@ -396,6 +398,15 @@ export default function MessagingPage({ user, token, onUnreadChange }) {
             <div className="messaging-chat-heading">
               <div>{selectedTitle}</div>
               <span>{selectedSubtitle}</span>
+            </div>
+
+            <div className="messaging-call-actions" aria-label="Future call actions">
+              <button type="button" title="Voice call - future scope" disabled>
+                <FontAwesomeIcon icon={faPhone} />
+              </button>
+              <button type="button" title="Video call - future scope" disabled>
+                <FontAwesomeIcon icon={faVideo} />
+              </button>
             </div>
           </header>
 

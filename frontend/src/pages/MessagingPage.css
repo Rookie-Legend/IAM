@@ -240,6 +240,7 @@
 }
 
 .messaging-chat-heading {
+  flex: 1;
   min-width: 0;
 }
 
@@ -258,6 +259,33 @@
   white-space: nowrap;
   color: var(--color-text-muted);
   font-size: 0.6875rem;
+}
+
+.messaging-call-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.messaging-call-actions button {
+  width: 2.25rem;
+  height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-elevated);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.messaging-call-actions button:hover {
+  background: var(--color-hover);
+  color: var(--color-text-secondary);
 }
 
 .messaging-message-area {
@@ -577,6 +605,15 @@
 }
 
 @media (max-width: 760px) {
+  .messaging-call-actions {
+    gap: 0.35rem;
+  }
+
+  .messaging-call-actions button {
+    width: 2rem;
+    height: 2rem;
+  }
+
   .messaging-list {
     width: 100%;
     max-width: none;

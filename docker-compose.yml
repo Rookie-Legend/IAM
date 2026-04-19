@@ -24,13 +24,19 @@ services:
       - ALGORITHM=HS256
       - GROQ_API_KEY=${GROQ_API_KEY}
       - VPN_SERVER_URL=http://vpn-server:4000
+      - GITLAB_URL=http://gitlab.eng.vpn
+      - GITLAB_ADMIN_TOKEN=${GITLAB_ADMIN_TOKEN:-}
+      - GITLAB_SYNC_ENABLED=true
     depends_on:
       - mongodb
     volumes:
       - backend_data:/src/data
       - ./backend:/src
+    extra_hosts:
+      - "gitlab.eng.vpn:172.30.0.50"
     networks:
-      - default
+      default:
+      iam_private:
 
   frontend:
     build: ./frontend
@@ -61,12 +67,38 @@ services:
     volumes:
       - vpn_master_data:/etc/openvpn
     networks:
-      - default
+      default:
+      iam_private:
+
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: iam_gitlab
+    hostname: gitlab.eng.vpn
+    restart: unless-stopped
+    shm_size: "256m"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.eng.vpn'
+        gitlab_rails['gitlab_shell_ssh_port'] = 22
+    volumes:
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
+      - gitlab_data:/var/opt/gitlab
+    networks:
+      iam_private:
+        ipv4_address: 172.30.0.50
 
 networks:
   default:
+  iam_private:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
 
 volumes:
   mongodb_data:
   vpn_master_data:
   backend_data:
+  gitlab_config:
+  gitlab_logs:
+  gitlab_data:
