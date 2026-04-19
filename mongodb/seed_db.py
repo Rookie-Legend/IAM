@@ -1,5 +1,6 @@
 import asyncio
 import os
+from datetime import date, datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
 
@@ -39,6 +40,7 @@ async def seed_db():
     await db.vpn_events.drop()
     await db.vpn_sessions.drop()
     await db.vpn_audit_logs.drop()
+    await db.planning_items.drop()
 
     print("Collections dropped")
 
@@ -268,6 +270,104 @@ async def seed_db():
     ]
     await db.access_states.insert_many(access_states_data)
     print("Seeded Access States")
+
+    today = date.today()
+    month_start = today.replace(day=1)
+
+    def plan_day(offset):
+        return (month_start + timedelta(days=offset)).isoformat()
+
+    now = datetime.utcnow()
+    planning_items_data = [
+        {
+            "title": "Engineering VPN rollout",
+            "description": "Deploy vpn_eng policy updates, verify provisioning, and test client downloads.",
+            "department": "Engineering",
+            "owner": "Cloud Infra Engineer",
+            "owner_id": "U1001",
+            "start": plan_day(1),
+            "end": plan_day(7),
+            "status": "active",
+            "priority": "high",
+            "type": "release",
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "title": "Frontend access review",
+            "description": "Review Engineering team VPN access and close stale access requests.",
+            "department": "Engineering",
+            "owner": "Frontend Engineer",
+            "owner_id": "U1002",
+            "start": plan_day(5),
+            "end": plan_day(11),
+            "status": "planned",
+            "priority": "medium",
+            "type": "task",
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "title": "Finance audit prep",
+            "description": "Prepare payroll and compliance evidence for vpn_fin access validation.",
+            "department": "Finance",
+            "owner": "Compliance Auditor",
+            "owner_id": "F1002",
+            "start": plan_day(3),
+            "end": plan_day(13),
+            "status": "active",
+            "priority": "high",
+            "type": "task",
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "title": "HR onboarding window",
+            "description": "Coordinate joiner access and confirm HR VPN entitlement rules.",
+            "department": "HR",
+            "owner": "HR Manager",
+            "owner_id": "H1001",
+            "start": plan_day(8),
+            "end": plan_day(16),
+            "status": "planned",
+            "priority": "medium",
+            "type": "meeting",
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "title": "Security escalation drill",
+            "description": "Validate escalation notifications, audit logging, and admin approval flow.",
+            "department": "Security",
+            "owner": "Admin",
+            "owner_id": "S1001",
+            "start": plan_day(14),
+            "end": plan_day(20),
+            "status": "blocked",
+            "priority": "high",
+            "type": "milestone",
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "title": "Hackathon demo freeze",
+            "description": "Freeze critical IAM flows and run final demo checks.",
+            "department": "Engineering",
+            "owner": "Backend Engineer",
+            "owner_id": "U1003",
+            "start": plan_day(21),
+            "end": plan_day(24),
+            "status": "done",
+            "priority": "low",
+            "type": "milestone",
+            "created_at": now,
+            "updated_at": now,
+        },
+    ]
+    await db.planning_items.insert_many(planning_items_data)
+    await db.planning_items.create_index("department")
+    await db.planning_items.create_index("start")
+    print("Seeded Planning Items")
 
     vpn_ip_pools_data = [
     {

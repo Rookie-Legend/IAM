@@ -64,16 +64,27 @@ async def fetch_policy_context(user_id: str, department: str, db, query: str = N
             "- Allowed Resources: none"
         )
 
-    policy = matched[0]
+    grant_policies = [p for p in matched if p.get("type", "access") in ("access", "start_access")]
+    block_policies = [p for p in matched if p.get("type") == "block_access"]
+    policy = grant_policies[0] if grant_policies else matched[0]
     rules = policy.get("rules", {})
 
-    # Policies use a top-level 'vpn' field OR rules.allowed_vpns / rules.vpn_access
-    # Normalise to a list regardless of schema variant
-    raw_vpn = policy.get("vpn") or rules.get("allowed_vpns") or rules.get("vpn_access") or []
-    if isinstance(raw_vpn, str):
-        allowed_vpns = [raw_vpn]
-    else:
-        allowed_vpns = list(raw_vpn)
+    allowed_vpns = []
+    blocked_vpns = []
+    for p in grant_policies:
+        p_rules = p.get("rules", {})
+        raw_vpn = p.get("vpn") or p_rules.get("allowed_vpns") or p_rules.get("vpn_access") or []
+        raw_vpns = [raw_vpn] if isinstance(raw_vpn, str) else list(raw_vpn)
+        for vpn in raw_vpns:
+            if vpn and vpn not in allowed_vpns:
+                allowed_vpns.append(vpn)
+
+    for p in block_policies:
+        raw_vpn = p.get("vpn")
+        if raw_vpn and raw_vpn not in blocked_vpns:
+            blocked_vpns.append(raw_vpn)
+
+    allowed_vpns = [vpn for vpn in allowed_vpns if vpn not in blocked_vpns]
 
     allowed_resources = rules.get("allowed_resources", rules.get("resources", []))
     mfa_required = rules.get("mfa_required", False)
@@ -84,6 +95,7 @@ async def fetch_policy_context(user_id: str, department: str, db, query: str = N
         f"- Assigned Policy: {policy.get('name', policy.get('pol_id', 'Unknown'))}",
         f"- Policy Type: {policy.get('type', 'access')}",
         f"- Allowed VPNs for this department: {', '.join(allowed_vpns) if allowed_vpns else 'none'}",
+        f"- Blocked VPNs for this department: {', '.join(blocked_vpns) if blocked_vpns else 'none'}",
         f"- Allowed Resources: {', '.join(allowed_resources) if allowed_resources else 'none'}",
         f"- MFA Required: {mfa_required}",
         f"- Policy Description: {policy.get('description', 'N/A')}",

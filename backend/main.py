@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection
 
-from app.api import auth, users, jml, policies, orchestrator, vpn, mfa, audit, admin, chatbot, messaging
+from app.api import auth, users, jml, policies, orchestrator, vpn, mfa, audit, admin, chatbot, messaging, planning
 
 
 class UTCJSONEncoder(json.JSONEncoder):
@@ -54,6 +54,7 @@ app.include_router(audit.router)
 app.include_router(admin.router)
 app.include_router(chatbot.router)
 app.include_router(messaging.router)
+app.include_router(planning.router)
 
 @app.get("/")
 async def root():

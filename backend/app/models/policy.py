@@ -5,6 +5,8 @@ from enum import Enum
 class PolicyType(str, Enum):
     JML = "jml"
     ACCESS = "access"
+    START_ACCESS = "start_access"
+    BLOCK_ACCESS = "block_access"
     MFA = "mfa"
 
 class PolicyBase(BaseModel):

@@ -1,14 +1,47 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBell, faCheckCircle, faTimesCircle, faX, faTriangleExclamation, faArrowUpRightFromSquare } from '@fortawesome/free-solid-svg-icons';
+import { faBell, faCheckCircle, faTimesCircle, faX, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { apiUrl } from '../stores/configStore';
+
+const PANEL_WIDTH = 330;
+const VIEWPORT_MARGIN = 12;
+const BELL_GAP = 8;
+const tint = (color, amount = '14%') => `color-mix(in srgb, ${color} ${amount}, transparent)`;
 
 export default function NotificationBell({ token, isAdmin }) {
   const [notifications, setNotifications] = useState([]);
   const [open, setOpen] = useState(false);
   const [dismissing, setDismissing] = useState(null);
+  const [panelPosition, setPanelPosition] = useState({
+    left: VIEWPORT_MARGIN,
+    bottom: VIEWPORT_MARGIN,
+    width: PANEL_WIDTH,
+    maxListHeight: 340,
+  });
   const panelRef = useRef(null);
   const bellRef = useRef(null);
+
+  const updatePanelPosition = useCallback(() => {
+    if (!bellRef.current) return;
+
+    const rect = bellRef.current.getBoundingClientRect();
+    const width = Math.min(PANEL_WIDTH, window.innerWidth - VIEWPORT_MARGIN * 2);
+    const centeredLeft = rect.left + rect.width / 2 - width / 2;
+    const left = Math.min(
+      Math.max(centeredLeft, VIEWPORT_MARGIN),
+      window.innerWidth - width - VIEWPORT_MARGIN
+    );
+    const bottom = Math.max(window.innerHeight - rect.top + BELL_GAP, VIEWPORT_MARGIN);
+    const availableHeight = Math.max(rect.top - BELL_GAP - VIEWPORT_MARGIN * 2, 180);
+
+    setPanelPosition({
+      left,
+      bottom,
+      width,
+      maxListHeight: Math.min(340, availableHeight),
+    });
+  }, []);
 
   const fetchNotifications = useCallback(async () => {
     if (!token) return;
@@ -49,6 +82,19 @@ export default function NotificationBell({ token, isAdmin }) {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  useEffect(() => {
+    if (!open) return;
+
+    updatePanelPosition();
+    window.addEventListener('resize', updatePanelPosition);
+    window.addEventListener('scroll', updatePanelPosition, true);
+
+    return () => {
+      window.removeEventListener('resize', updatePanelPosition);
+      window.removeEventListener('scroll', updatePanelPosition, true);
+    };
+  }, [open, updatePanelPosition]);
+
   const dismiss = async (id, e) => {
     e.stopPropagation();
     setDismissing(id);
@@ -78,7 +124,9 @@ export default function NotificationBell({ token, isAdmin }) {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
         });
-      } catch {}
+      } catch {
+        // ignore individual dismiss failures and continue clearing the rest
+      }
     }
     setNotifications([]);
   };
@@ -92,7 +140,7 @@ export default function NotificationBell({ token, isAdmin }) {
   };
 
   // ── Accent colour per mode ──
-  const accentColor = isAdmin ? '#f59e0b' : '#3b82f6'; // amber for admin, blue for user
+  const accentColor = isAdmin ? 'var(--color-warning)' : 'var(--color-accent-blue)';
 
   return (
     <div className="relative" style={{ display: 'inline-block' }}>
@@ -108,7 +156,7 @@ export default function NotificationBell({ token, isAdmin }) {
           height: '36px',
           borderRadius: '10px',
           border: open ? `1.5px solid ${accentColor}` : '1.5px solid transparent',
-          background: open ? `${accentColor}18` : 'transparent',
+          background: open ? tint(accentColor, '14%') : 'transparent',
           color: count > 0 ? accentColor : 'var(--color-text-muted, #9ca3af)',
           cursor: 'pointer',
           display: 'flex',
@@ -119,7 +167,7 @@ export default function NotificationBell({ token, isAdmin }) {
           flexShrink: 0,
         }}
         onMouseEnter={e => {
-          e.currentTarget.style.background = `${accentColor}14`;
+          e.currentTarget.style.background = tint(accentColor, '12%');
           e.currentTarget.style.color = accentColor;
         }}
         onMouseLeave={e => {
@@ -138,7 +186,7 @@ export default function NotificationBell({ token, isAdmin }) {
             width: '16px',
             height: '16px',
             borderRadius: '50%',
-            background: isAdmin ? '#f59e0b' : '#ef4444',
+            background: isAdmin ? 'var(--color-warning)' : 'var(--color-error)',
             color: '#fff',
             fontSize: '9px',
             fontWeight: '700',
@@ -154,21 +202,20 @@ export default function NotificationBell({ token, isAdmin }) {
       </button>
 
       {/* Dropdown Panel */}
-      {open && (
+      {open && createPortal((
         <div
           ref={panelRef}
           id="notif-panel"
           style={{
-            position: 'absolute',
-            bottom: 'calc(100% + 8px)',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: '330px',
+            position: 'fixed',
+            bottom: `${panelPosition.bottom}px`,
+            left: `${panelPosition.left}px`,
+            width: `${panelPosition.width}px`,
             background: 'var(--color-surface, #1e1e2e)',
             border: '1px solid var(--color-border, #2a2a3e)',
             borderRadius: '14px',
-            boxShadow: '0 16px 40px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04)',
-            zIndex: 1000,
+            boxShadow: 'var(--color-shadow-strong)',
+            zIndex: 2000,
             overflow: 'hidden',
             animation: 'notif-panel-in 0.18s cubic-bezier(0.34,1.56,0.64,1)',
           }}
@@ -217,7 +264,7 @@ export default function NotificationBell({ token, isAdmin }) {
                   borderRadius: '6px',
                   transition: 'background 0.1s',
                 }}
-                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--color-hover)'}
                 onMouseLeave={e => e.currentTarget.style.background = 'none'}
               >
                 Clear all
@@ -226,7 +273,7 @@ export default function NotificationBell({ token, isAdmin }) {
           </div>
 
           {/* Notification List */}
-          <div style={{ maxHeight: '340px', overflowY: 'auto' }}>
+          <div style={{ maxHeight: `${panelPosition.maxListHeight}px`, overflowY: 'auto' }}>
             {count === 0 ? (
               <div style={{
                 padding: '32px 16px',
@@ -248,7 +295,7 @@ export default function NotificationBell({ token, isAdmin }) {
                     gap: '10px',
                     padding: '12px 16px',
                     borderBottom: i < notifications.length - 1 ? '1px solid var(--color-border-subtle, #252535)' : 'none',
-                    background: 'rgba(245,158,11,0.04)',
+                    background: 'var(--color-warning-bg)',
                     transition: 'background 0.15s',
                     animation: `notif-slide-in 0.2s ease ${i * 0.05}s both`,
                   }}
@@ -258,22 +305,22 @@ export default function NotificationBell({ token, isAdmin }) {
                     width: '32px',
                     height: '32px',
                     borderRadius: '50%',
-                    background: 'rgba(245,158,11,0.15)',
+                    background: 'var(--color-warning-muted)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0,
                     marginTop: '2px',
                   }}>
-                    <FontAwesomeIcon icon={faTriangleExclamation} style={{ color: '#f59e0b', fontSize: '14px' }} />
+                    <FontAwesomeIcon icon={faTriangleExclamation} style={{ color: 'var(--color-warning)', fontSize: '14px' }} />
                   </div>
 
                   {/* Content */}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '12.5px', fontWeight: '600', color: 'var(--color-text, #e2e8f0)', lineHeight: 1.4, display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                       <span style={{
-                        background: 'rgba(245,158,11,0.15)',
-                        color: '#f59e0b',
+                        background: 'var(--color-warning-muted)',
+                        color: 'var(--color-warning)',
                         padding: '1px 6px',
                         borderRadius: '4px',
                         fontSize: '10px',
@@ -317,8 +364,8 @@ export default function NotificationBell({ token, isAdmin }) {
                       opacity: dismissing === n.id ? 0.4 : 1,
                     }}
                     onMouseEnter={e => {
-                      e.currentTarget.style.background = 'rgba(245,158,11,0.12)';
-                      e.currentTarget.style.color = '#f59e0b';
+                      e.currentTarget.style.background = 'var(--color-warning-bg)';
+                      e.currentTarget.style.color = 'var(--color-warning)';
                     }}
                     onMouseLeave={e => {
                       e.currentTarget.style.background = 'transparent';
@@ -343,8 +390,8 @@ export default function NotificationBell({ token, isAdmin }) {
                       padding: '12px 16px',
                       borderBottom: i < notifications.length - 1 ? '1px solid var(--color-border-subtle, #252535)' : 'none',
                       background: isApproved
-                        ? 'rgba(34,197,94,0.04)'
-                        : 'rgba(239,68,68,0.04)',
+                        ? 'var(--color-success-bg)'
+                        : 'var(--color-error-bg)',
                       transition: 'background 0.15s',
                       animation: `notif-slide-in 0.2s ease ${i * 0.05}s both`,
                     }}
@@ -354,7 +401,7 @@ export default function NotificationBell({ token, isAdmin }) {
                       width: '32px',
                       height: '32px',
                       borderRadius: '50%',
-                      background: isApproved ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                      background: isApproved ? 'var(--color-success-bg)' : 'var(--color-error-bg)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -364,7 +411,7 @@ export default function NotificationBell({ token, isAdmin }) {
                       <FontAwesomeIcon
                         icon={isApproved ? faCheckCircle : faTimesCircle}
                         style={{
-                          color: isApproved ? '#22c55e' : '#ef4444',
+                          color: isApproved ? 'var(--color-success)' : 'var(--color-error)',
                           fontSize: '14px',
                         }}
                       />
@@ -374,8 +421,8 @@ export default function NotificationBell({ token, isAdmin }) {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: '12.5px', fontWeight: '600', color: 'var(--color-text, #e2e8f0)', lineHeight: 1.4 }}>
                         <span style={{
-                          background: isApproved ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                          color: isApproved ? '#22c55e' : '#ef4444',
+                          background: isApproved ? 'var(--color-success-bg)' : 'var(--color-error-bg)',
+                          color: isApproved ? 'var(--color-success)' : 'var(--color-error)',
                           padding: '1px 6px',
                           borderRadius: '4px',
                           fontSize: '10px',
@@ -424,8 +471,8 @@ export default function NotificationBell({ token, isAdmin }) {
                         opacity: dismissing === n.id ? 0.4 : 1,
                       }}
                       onMouseEnter={e => {
-                        e.currentTarget.style.background = 'rgba(239,68,68,0.12)';
-                        e.currentTarget.style.color = '#ef4444';
+                        e.currentTarget.style.background = 'var(--color-error-bg)';
+                        e.currentTarget.style.color = 'var(--color-error)';
                       }}
                       onMouseLeave={e => {
                         e.currentTarget.style.background = 'transparent';
@@ -455,7 +502,7 @@ export default function NotificationBell({ token, isAdmin }) {
             </div>
           )}
         </div>
-      )}
+      ), document.body)}
 
       <style>{`
         @keyframes bell-ring {
@@ -468,8 +515,8 @@ export default function NotificationBell({ token, isAdmin }) {
           90% { transform: rotate(-2deg); }
         }
         @keyframes notif-panel-in {
-          from { opacity: 0; transform: translateX(-50%) scale(0.95) translateY(6px); }
-          to   { opacity: 1; transform: translateX(-50%) scale(1) translateY(0); }
+          from { opacity: 0; transform: scale(0.95) translateY(6px); }
+          to   { opacity: 1; transform: scale(1) translateY(0); }
         }
         @keyframes notif-slide-in {
           from { opacity: 0; transform: translateX(-8px); }

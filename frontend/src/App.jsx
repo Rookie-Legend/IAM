@@ -8,13 +8,14 @@ import VPNCenter from './pages/VPNCenter';
 import LoginPage from './pages/LoginPage';
 import Profile from './pages/Profile';
 import MessagingPage from './pages/MessagingPage';
+import TeamPlanPage from './pages/TeamPlanPage';
 import NotificationBell from './components/NotificationBell';
 import { useTheme } from './contexts/ThemeContext';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faUser, faComment, faServer, faShieldHalved, faChartBar,
   faRightFromBracket, faSun, faMoon, faUserPlus, faComments,
-  faChevronLeft, faChevronRight,
+  faChevronLeft, faChevronRight, faCalendarDays,
 } from '@fortawesome/free-solid-svg-icons';
 import { apiUrl } from './stores/configStore';
 import './App.css';
@@ -72,11 +73,9 @@ function App() {
     }
   };
 
-  // ── Fetch total unread messages count (non-admin only) ──
+  // ── Fetch total unread messages count ──
   const fetchUnreadCount = useCallback(async () => {
     if (!token || !user) return;
-    const ADMIN_ROLES = ['Security Admin', 'System Administrator', 'HR Manager', 'admin'];
-    if (ADMIN_ROLES.includes(user.role)) return;
     try {
       const res = await fetch(apiUrl('/api/messaging/conversations'), {
         headers: { Authorization: `Bearer ${token}` },
@@ -86,7 +85,9 @@ function App() {
         const total = convos.reduce((sum, c) => sum + (c.unread_count || 0), 0);
         setTotalUnread(total);
       }
-    } catch {}
+    } catch {
+      // keep the previous badge count if polling fails
+    }
   }, [token, user]);
 
   useEffect(() => {
@@ -161,9 +162,8 @@ function App() {
     { id: 'lab', icon: faServer, label: 'VPN Center' },
   ];
 
-  if (!isAdmin) {
-    navItems.push({ id: 'messages', icon: faComments, label: 'Messages', badge: totalUnread > 0 ? totalUnread : null });
-  }
+  navItems.push({ id: 'messages', icon: faComments, label: 'Messages', badge: totalUnread > 0 ? totalUnread : null });
+  navItems.push({ id: 'team_plan', icon: faCalendarDays, label: 'Team Plan' });
 
   if (isAdmin) {
     navItems.push(
@@ -186,7 +186,7 @@ function App() {
           width: navCollapsed ? NAV_W_COLLAPSED : NAV_W_FULL,
           transition: 'width 0.22s cubic-bezier(0.4,0,0.2,1)',
           flexShrink: 0,
-          overflow: 'hidden',
+          overflow: 'visible',
           display: 'flex',
           flexDirection: 'column',
           background: 'var(--color-surface)',
@@ -479,6 +479,7 @@ function App() {
             onUnreadChange={setTotalUnread}
           />
         )}
+        {activeTab === 'team_plan' && <TeamPlanPage user={user} token={token} />}
         {activeTab === 'admin' && <AdminDashboard token={token} />}
         {activeTab === 'admin_joiner' && <AdminJoiner token={token} />}
         {activeTab === 'audit' && <AuditDashboard token={token} />}

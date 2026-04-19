@@ -89,7 +89,7 @@ coverage/
 .coverage
 htmlcov/
 .pytest_cache/
-
+docs/
 # =========================
 
 # Misc
@@ -102,5 +102,6 @@ htmlcov/
 *.seed
 .agent
 
+*.pdf
 
 msmtprc

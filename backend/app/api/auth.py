@@ -73,11 +73,52 @@ class VerifyOTPRequest(BaseModel):
     token: str
     otp: str
 
+class PasswordResetRequest(BaseModel):
+    identifier: str
+
+class VerifyPasswordResetOTPRequest(BaseModel):
+    identifier: str
+    otp: str
+
+class CompletePasswordResetRequest(BaseModel):
+    identifier: str
+    otp: str
+    password: str
+
 class CompleteRegistrationRequest(BaseModel):
     token: str
     username: str
     full_name: str
     password: str
+
+
+def mask_email(email: str) -> str:
+    if not email or "@" not in email:
+        return ""
+    user, domain = email.split("@", 1)
+    if len(user) <= 2:
+        masked_user = user[:1] + "***"
+    else:
+        masked_user = user[:2] + "***" + user[-1:]
+    return f"{masked_user}@{domain}"
+
+
+async def find_reset_user(db, identifier: str):
+    normalized = (identifier or "").strip()
+    if not normalized:
+        return None
+    return await db["users"].find_one({
+        "$or": [
+            {"username": normalized},
+            {"email": normalized},
+            {"user_id": normalized},
+        ],
+        "disabled": {"$ne": True},
+    })
+
+
+def reset_otp_key(user_id: str) -> str:
+    return f"reset_{user_id}"
 
 @router.post("/verify-invite-token")
 async def verify_invite_token(request: VerifyTokenRequest, db=Depends(get_database)):
@@ -124,6 +165,86 @@ async def verify_registration_otp(request: VerifyOTPRequest, db=Depends(get_data
     await db["invites"].update_one({"token": request.token}, {"$set": {"status": "otp_verified"}})
 
     return {"status": "success", "message": "OTP verified. You can now complete your registration."}
+
+
+@router.post("/password-reset/request-otp")
+async def request_password_reset_otp(request: PasswordResetRequest, db=Depends(get_database)):
+    user = await find_reset_user(db, request.identifier)
+    if not user:
+        raise HTTPException(status_code=404, detail="No active account found for that username or email")
+
+    email = user.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="No email is configured for this account")
+
+    otp = ''.join(random.choices(string.digits, k=6))
+    expires_at = datetime.utcnow() + timedelta(minutes=10)
+    await db["otp_store"].update_one(
+        {"user_id": reset_otp_key(user["user_id"])},
+        {
+            "$set": {
+                "otp": otp,
+                "email": email,
+                "expires_at": expires_at,
+                "verified": False,
+                "purpose": "password_reset",
+                "identifier": request.identifier.strip(),
+            }
+        },
+        upsert=True,
+    )
+
+    await send_email(email, "Your CorpOD Password Reset Code", "otp_email.html", {"OTP": otp})
+    return {"status": "success", "message": "OTP sent", "email": mask_email(email)}
+
+
+@router.post("/password-reset/verify-otp")
+async def verify_password_reset_otp(request: VerifyPasswordResetOTPRequest, db=Depends(get_database)):
+    user = await find_reset_user(db, request.identifier)
+    if not user:
+        raise HTTPException(status_code=404, detail="No active account found for that username or email")
+
+    record = await db["otp_store"].find_one({
+        "user_id": reset_otp_key(user["user_id"]),
+        "otp": request.otp,
+        "verified": False,
+        "purpose": "password_reset",
+    })
+    if not record or record["expires_at"] < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+
+    await db["otp_store"].update_one(
+        {"user_id": reset_otp_key(user["user_id"])},
+        {"$set": {"verified": True}},
+    )
+    return {"status": "success", "message": "OTP verified"}
+
+
+@router.post("/password-reset/complete")
+async def complete_password_reset(request: CompletePasswordResetRequest, db=Depends(get_database)):
+    if len(request.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    user = await find_reset_user(db, request.identifier)
+    if not user:
+        raise HTTPException(status_code=404, detail="No active account found for that username or email")
+
+    record = await db["otp_store"].find_one({
+        "user_id": reset_otp_key(user["user_id"]),
+        "otp": request.otp,
+        "verified": True,
+        "purpose": "password_reset",
+    })
+    if not record or record["expires_at"] < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="OTP not verified or expired")
+
+    await db["users"].update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"hashed_password": get_password_hash(request.password)}},
+    )
+    await db["otp_store"].delete_one({"user_id": reset_otp_key(user["user_id"])})
+    return {"status": "success", "message": "Password reset successfully"}
+
 
 @router.post("/complete-registration")
 async def complete_registration(request: CompleteRegistrationRequest, db=Depends(get_database)):

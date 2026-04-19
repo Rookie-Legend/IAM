@@ -189,11 +189,12 @@ CRITICAL RULE — VPN NAMING:
 - Your explanation must always name the exact requested VPN, not any other.
 - Use the "All Available VPNs in System" list in the policy context for reference only.
 - Use the "Allowed VPNs for this department" to decide if the request matches policy.
+- If "Blocked VPNs for this department" contains the requested VPN, ALWAYS DENY.
 
 Policy classification:
 - VALID ACCESS   : resource already allowed by the user's department policy
-- POLICY GAP     : resource NOT in policy but the request is contextually reasonable (e.g. cross-team project, temp need)
-- POLICY VIOLATION : resource entirely unrelated to user's role/department, high-risk, or no valid justification
+- POLICY GAP     : resource NOT in policy, but the user gave a concrete, temporary, role-related business need
+- POLICY VIOLATION : resource is outside policy and the reason is missing, vague, unrelated, high-risk, or not tied to assigned work
 
 DECISION RULES:
 
@@ -215,6 +216,8 @@ DECISION RULES:
 
 3. CLEAR DENIAL (STRICT RULE):
 - If the request is clearly invalid, unauthorized, or unrelated to the users role/work → DENY
+- If the requested VPN belongs to another department and the user gives no concrete work reason → DENY
+- If the reason is only vague desire such as "I need it", "for work", "because I want access", or "for finance access" → DENY
 
 Examples:
 - Requesting access to sensitive data (e.g., salaries, personal data,etc) without valid need
@@ -235,8 +238,10 @@ In such cases:
 --------------------------------------------------
 
 5. POLICY GAP HANDLING:
-- If the request is not in policy BUT is role/work-related:
+- If the request is not in policy BUT the stated reason is specific, temporary, auditable, and role/work-related:
   → ESCALATE (do NOT deny)
+- If the request is not in policy and the stated reason is weak, generic, or missing:
+  → DENY
 
 --------------------------------------------------
 
@@ -254,7 +259,8 @@ Rules:
 7. FINAL DECISION SUMMARY:
 
 - Already has access → ACCEPT
-- Role/work-related but not in policy → ESCALATE
+- Clearly justified temporary role/work need but not in policy → ESCALATE
+- Weak or missing reason for out-of-policy access → DENY
 - Clearly unrelated / invalid / unjustified → DENY
 - Disabled or offboarded user → DENY
 
@@ -306,6 +312,125 @@ async def make_access_decision(
             "explanation": "Could not evaluate the request. Access denied for safety.",
         }
     return result
+
+
+def _is_vpn_resource(resource: str) -> bool:
+    return "vpn" in (resource or "").lower()
+
+
+def _allowed_vpns_from_policy_context(policy_ctx: str) -> set[str]:
+    for line in (policy_ctx or "").splitlines():
+        if "Allowed VPNs for this department:" not in line:
+            continue
+        raw_value = line.split(":", 1)[1].strip()
+        if raw_value.lower() in {"", "none", "not explicitly defined"}:
+            return set()
+        return {item.strip().lower() for item in raw_value.split(",") if item.strip()}
+    return set()
+
+
+def _blocked_vpns_from_policy_context(policy_ctx: str) -> set[str]:
+    for line in (policy_ctx or "").splitlines():
+        if "Blocked VPNs for this department:" not in line:
+            continue
+        raw_value = line.split(":", 1)[1].strip()
+        if raw_value.lower() in {"", "none", "not explicitly defined"}:
+            return set()
+        return {item.strip().lower() for item in raw_value.split(",") if item.strip()}
+    return set()
+
+
+def _has_concrete_business_need(reason: str, user_message: str) -> bool:
+    text = f"{reason or ''} {user_message or ''}".lower()
+    words = [word.strip(".,:;!?()[]{}") for word in text.split()]
+    meaningful_words = [word for word in words if len(word) > 2]
+    if len(meaningful_words) < 6:
+        return False
+
+    weak_phrases = [
+        "i want access",
+        "i need access",
+        "give me access",
+        "for work",
+        "for finance access",
+        "just need",
+        "because i want",
+    ]
+    if any(phrase in text for phrase in weak_phrases) and len(meaningful_words) < 10:
+        return False
+
+    business_need_terms = {
+        "approved", "audit", "change", "cross-team", "deployment", "incident",
+        "investigation", "migration", "outage", "project", "routing", "ticket",
+        "temporary", "troubleshoot", "validation", "vpn", "network", "firewall",
+        "integration", "release", "support",
+    }
+    return any(term in text for term in business_need_terms)
+
+
+def enforce_policy_gap_quality(
+    decision: str,
+    requested_resource: str,
+    reason: str,
+    user_message: str,
+    policy_ctx: str,
+    result: dict,
+) -> str:
+    """Prevent weak out-of-policy VPN requests from becoming escalations."""
+    decision = (decision or "DENY").upper()
+    if decision not in {"ACCEPT", "ESCALATE"} or not _is_vpn_resource(requested_resource):
+        return decision
+
+    allowed_vpns = _allowed_vpns_from_policy_context(policy_ctx)
+    blocked_vpns = _blocked_vpns_from_policy_context(policy_ctx)
+    if requested_resource.lower() in blocked_vpns:
+        result["decision"] = "DENY"
+        result["policy_check"] = (
+            f"{result.get('policy_check', '')} [Guardrail] {requested_resource} is actively "
+            "blocked by a department policy."
+        )
+        result["explanation"] = (
+            f"{requested_resource} is currently blocked by policy for your department."
+        )
+        return "DENY"
+
+    if requested_resource.lower() in allowed_vpns:
+        return decision
+
+    if decision == "ACCEPT":
+        result["decision"] = "ESCALATE"
+        result["policy_check"] = (
+            f"{result.get('policy_check', '')} [Override] {requested_resource} is not "
+            "allowed by the user's department policy, so it cannot be auto-approved."
+        )
+        result["explanation"] = (
+            f"{requested_resource} is outside your department policy and needs admin review."
+        )
+        decision = "ESCALATE"
+
+    if _has_concrete_business_need(reason, user_message):
+        result["decision"] = "ESCALATE"
+        result["policy_check"] = (
+            f"{result.get('policy_check', '')} [Guardrail] Out-of-policy VPN request "
+            "has a concrete role-related business reason, so it requires admin review."
+        )
+        return "ESCALATE"
+
+    result["decision"] = "DENY"
+    result["policy_check"] = (
+        f"{result.get('policy_check', '')} [Guardrail] {requested_resource} is not "
+        "allowed by the user's department policy and the request did not include a "
+        "specific temporary business justification."
+    )
+    result["audit_check"] = (
+        f"{result.get('audit_check', '')} [Guardrail] Audit context cannot override "
+        "a weak out-of-policy VPN request."
+    )
+    result["explanation"] = (
+        f"{requested_resource} is outside your department policy. Please include a "
+        "specific temporary business need, project, incident, or ticket for admin review."
+    )
+    return "DENY"
 
 
 # --------------------------------------------------------------------------- #
@@ -633,6 +758,14 @@ async def user_chat(
         identity_ctx, policy_ctx, audit_ctx,
     )
     decision = result.get("decision", "DENY")
+    decision = enforce_policy_gap_quality(
+        decision,
+        requested_resource,
+        reason,
+        user_message,
+        policy_ctx,
+        result,
+    )
 
     # --- Bug-1 guard: if user was recently reinstated after a disable,
     #     never auto-ACCEPT — force ESCALATE so admin reviews the re-grant ---

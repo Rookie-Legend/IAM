@@ -12,8 +12,18 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { apiUrl } from '../stores/configStore';
 
-const TYPE_COLORS = { jml: '#22c55e', access: '#3b82f6', mfa: '#f59e0b' };
-const STATUS_COLORS = { active: '#22c55e', inactive: '#ef4444', disabled: '#f59e0b' };
+const TYPE_COLORS = {
+  jml: 'var(--color-success)',
+  access: 'var(--color-accent-blue)',
+  start_access: 'var(--color-success)',
+  block_access: 'var(--color-error)',
+  mfa: 'var(--color-warning)'
+};
+const STATUS_COLORS = {
+  active: 'var(--color-success)',
+  inactive: 'var(--color-error)',
+  disabled: 'var(--color-warning)'
+};
 const POLICY_STATE_STYLES = {
   active: {
     badgeBg: 'var(--color-success-bg)',
@@ -208,8 +218,8 @@ const AdminDashboard = ({ token }) => {
         <div className="grid grid-cols-4 gap-4 mb-7">
           {[
             { label: 'Total Users', value: stats.total_users, icon: faUsers },
-            { label: 'Active Users', value: stats.active_users, icon: faUserPlus, color: '#22c55e' },
-            { label: 'Disabled', value: stats.disabled_users, icon: faUserMinus, color: '#f59e0b' },
+            { label: 'Active Users', value: stats.active_users, icon: faUserPlus, color: 'var(--color-success)' },
+            { label: 'Disabled', value: stats.disabled_users, icon: faUserMinus, color: 'var(--color-warning)' },
             { label: 'Policies', value: policies.length, icon: faShieldHalved },
           ].map(s => (
             <div key={s.label} className="bg-surface border border-border-subtle rounded-xl p-4 text-center">
@@ -282,8 +292,8 @@ const AdminDashboard = ({ token }) => {
                       <span
                         className="px-2 py-1 rounded-full text-xs font-semibold"
                         style={{
-                          backgroundColor: `${STATUS_COLORS[u.status] || '#888'}20`,
-                          color: STATUS_COLORS[u.status] || '#888'
+                          backgroundColor: `color-mix(in srgb, ${STATUS_COLORS[u.status] || 'var(--color-text-muted)'} 14%, transparent)`,
+                          color: STATUS_COLORS[u.status] || 'var(--color-text-muted)'
                         }}
                       >
                         {u.status || 'unknown'}
@@ -294,7 +304,7 @@ const AdminDashboard = ({ token }) => {
                         {u.disabled ? (
                           <button
                             onClick={() => handleUserActionClick(u.user_id, 'reinstate')}
-                            className="px-3 py-1.5 rounded text-xs font-semibold bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-all flex items-center gap-1"
+                            className="px-3 py-1.5 rounded text-xs font-semibold bg-success/10 text-success hover:bg-success/20 transition-all flex items-center gap-1"
                             title="Reinstate user"
                           >
                             <FontAwesomeIcon icon={faUserPlus} />
@@ -304,7 +314,7 @@ const AdminDashboard = ({ token }) => {
                           <>
                             <button
                               onClick={() => handleUserActionClick(u.user_id, 'disable')}
-                              className="px-3 py-1.5 rounded text-xs font-semibold bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 transition-all flex items-center gap-1"
+                              className="px-3 py-1.5 rounded text-xs font-semibold bg-warning/10 text-warning hover:bg-warning/20 transition-all flex items-center gap-1"
                               title="Disable user"
                             >
                               <FontAwesomeIcon icon={faUserMinus} />
@@ -312,7 +322,7 @@ const AdminDashboard = ({ token }) => {
                             </button>
                             <button
                               onClick={() => handleUserActionClick(u.user_id, 'offboard')}
-                              className="px-3 py-1.5 rounded text-xs font-semibold bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-all flex items-center gap-1"
+                              className="px-3 py-1.5 rounded text-xs font-semibold bg-error/10 text-error hover:bg-error/20 transition-all flex items-center gap-1"
                               title="Offboard user"
                             >
                               <FontAwesomeIcon icon={faRightFromBracket} />
@@ -363,6 +373,8 @@ const AdminDashboard = ({ token }) => {
                 <select value={newPolicy.type} onChange={e => setNewPolicy({ ...newPolicy, type: e.target.value })}
                   className="w-full bg-elevated border border-border rounded-md px-3.5 py-2.5 text-sm text-text outline-none focus:border-accent-blue">
                   <option value="access">Access</option>
+                  <option value="start_access">Start Access</option>
+                  <option value="block_access">Block Access</option>
                   <option value="jml">JML</option>
                   <option value="mfa">MFA</option>
                 </select>
@@ -370,7 +382,7 @@ const AdminDashboard = ({ token }) => {
               <div>
                 <label className="block text-xs text-text-muted mb-1.5 font-medium">JSON</label>
                 <textarea
-                  placeholder='{"department": "HR", "vpn": "vpn_hr"}'
+                  placeholder='{"department": "Engineering", "vpn": "vpn_fin", "is_active": true}'
                   value={newPolicy.json || ''}
                   onChange={e => {
                     try {
@@ -413,7 +425,7 @@ const AdminDashboard = ({ token }) => {
                   const policyStateStyle = p.is_active ? POLICY_STATE_STYLES.active : POLICY_STATE_STYLES.inactive;
                   return (
                 <div key={p.pol_id} className={`mb-3 p-4 border border-border-subtle rounded-lg transition-all ${p.is_active ? 'bg-elevated hover:bg-hover' : 'bg-elevated opacity-60'}`}
-                  style={{ borderLeftWidth: 4, borderLeftColor: p.is_active ? (TYPE_COLORS[p.type] || '#888') : '#ef4444' }}>
+                  style={{ borderLeftWidth: 4, borderLeftColor: p.is_active ? (TYPE_COLORS[p.type] || 'var(--color-text-muted)') : 'var(--color-error)' }}>
                   <div className="flex justify-between items-center mb-2">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold">{p.name}</span>
@@ -502,9 +514,9 @@ const AdminDashboard = ({ token }) => {
                 disabled={confirmModal.inputValue !== 'YES'}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                   confirmModal.inputValue === 'YES' 
-                    ? confirmModal.action === 'offboard' ? 'bg-red-600 text-white hover:bg-red-500' 
-                      : confirmModal.action === 'disable' ? 'bg-yellow-600 text-white hover:bg-yellow-500'
-                      : 'bg-green-600 text-white hover:bg-green-500'
+                    ? confirmModal.action === 'offboard' ? 'bg-error text-white hover:opacity-90' 
+                      : confirmModal.action === 'disable' ? 'bg-warning text-white hover:opacity-90'
+                      : 'bg-success text-white hover:opacity-90'
                     : 'bg-elevated text-text-muted opacity-50 cursor-not-allowed'
                 }`}
               >
